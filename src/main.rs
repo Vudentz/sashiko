@@ -21,11 +21,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
-struct Cli {
-    /// Name of the person to greet
-    #[arg(short, long)]
-    name: Option<String>,
-}
+struct Cli {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
