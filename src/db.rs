@@ -365,7 +365,7 @@ impl Database {
         self.conn
             .execute(
                 "INSERT INTO patchsets (thread_id, cover_letter_message_id, subject, author, date, total_parts, received_parts, status, parser_version, to_recipients, cc_recipients, baseline_id, subject_index) 
-                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Pending', ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Incomplete', ?, ?, ?, ?, ?)",
                 libsql::params![thread_id, cover_letter_message_id, subject, author, date, total_parts, parser_version, to, cc, baseline_id, part_index],
             )
             .await?;
@@ -403,6 +403,14 @@ impl Database {
                 libsql::params![patchset_id, patchset_id],
             )
             .await?;
+
+        // Check if complete and update status
+        // We only transition from 'Incomplete' to 'Pending' (ready for review)
+        self.conn.execute(
+            "UPDATE patchsets SET status = 'Pending' WHERE id = ? AND received_parts >= total_parts AND status = 'Incomplete'",
+            libsql::params![patchset_id],
+        ).await?;
+
         Ok(())
     }
 
@@ -692,6 +700,36 @@ mod tests {
         // Verify the final subject is the cover letter (index 0)
         let list = db.get_patchsets(1, 0).await.unwrap();
         assert_eq!(list[0].subject.as_deref(), Some("[PATCH 0/5] Feature part 0"));
+    }
+
+    #[tokio::test]
+    async fn test_patchset_status_transition() {
+        let db = setup_db().await;
+        let thread_id = db.create_thread("root_status", "Status Test", 60000).await.unwrap();
+        let author = "Status Author <status@example.com>";
+
+        // 1. Create patchset with 2 parts. received=0 initially (cover letter doesn't count as received part in DB logic usually, but here we insert it)
+        // Wait, create_patchset creates the set. create_patch updates received count.
+        // We call create_patchset first.
+        let ps_id = db.create_patchset(
+            thread_id, None, "Status Test", author, 60000, 2, 1, "", "", None, None, 1
+        ).await.unwrap().unwrap();
+
+        // Check initial status
+        let list = db.get_patchsets(1, 0).await.unwrap();
+        assert_eq!(list[0].status.as_deref(), Some("Incomplete"));
+
+        // 2. Add Patch 1. received=1. Total=2. Status should be Incomplete.
+        db.create_message("msg_1", thread_id, None, author, "Part 1", 60005, "").await.unwrap();
+        db.create_patch(ps_id, "msg_1", 1, "diff").await.unwrap();
+        let list = db.get_patchsets(1, 0).await.unwrap();
+        assert_eq!(list[0].status.as_deref(), Some("Incomplete"));
+
+        // 3. Add Patch 2. received=2. Total=2. Status should transition to Pending.
+        db.create_message("msg_2", thread_id, None, author, "Part 2", 60010, "").await.unwrap();
+        db.create_patch(ps_id, "msg_2", 2, "diff").await.unwrap();
+        let list = db.get_patchsets(1, 0).await.unwrap();
+        assert_eq!(list[0].status.as_deref(), Some("Pending"));
     }
 
     #[tokio::test]

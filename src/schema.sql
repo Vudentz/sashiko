@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS patchsets (
     subject TEXT,
     author TEXT,
     date INTEGER,
-    status TEXT DEFAULT 'Pending', -- Pending, Assembled, Applied, Failed, Reviewed
+    status TEXT DEFAULT 'Incomplete', -- Incomplete, Pending, Assembled, Applied, Failed, Reviewed
     total_parts INTEGER,
     received_parts INTEGER,
     subject_index INTEGER DEFAULT 9999,
