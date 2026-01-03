@@ -5,11 +5,12 @@ mod db;
 mod events;
 mod git_ops;
 mod ingestor;
+mod inspector;
 mod nntp;
 mod patch;
 mod settings;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use db::Database;
 use events::Event;
 use ingestor::Ingestor;
@@ -29,6 +30,14 @@ struct Cli {
     /// Disable NNTP ingestor
     #[arg(long)]
     no_nntp: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    Inspect,
 }
 
 const PARSER_VERSION: i32 = 2;
@@ -60,6 +69,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize Database
     let db = Arc::new(Database::new(&settings.database).await?);
     db.migrate().await?;
+
+    if let Some(Commands::Inspect) = cli.command {
+        return inspector::run_inspection(db).await.map_err(|e| e.into());
+    }
 
     // Create internal task queue
     let (tx, mut rx) = mpsc::channel::<Event>(100);
