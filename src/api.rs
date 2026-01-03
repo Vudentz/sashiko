@@ -67,8 +67,16 @@ async fn list_patchsets(
     let per_page = pagination.per_page.unwrap_or(50).clamp(1, 100);
     let offset = (page - 1) * per_page;
 
-    let items = state.db.get_patchsets(per_page, offset).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let total = state.db.count_patchsets().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = state
+        .db
+        .get_patchsets(per_page, offset)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let total = state
+        .db
+        .count_patchsets()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(PatchsetsResponse {
         items,
@@ -78,13 +86,14 @@ async fn list_patchsets(
     }))
 }
 
-
-
 async fn get_patchset(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PatchQuery>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let id_val = query.id.parse::<i64>().map_err(|_| StatusCode::BAD_REQUEST)?;
+    let id_val = query
+        .id
+        .parse::<i64>()
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     info!("Fetching details for patchset id: {}", id_val);
 
@@ -93,11 +102,11 @@ async fn get_patchset(
         Ok(None) => {
             info!("Patchset not found: {}", id_val);
             Err(StatusCode::NOT_FOUND)
-        },
+        }
         Err(e) => {
             info!("Database error: {}", e);
             Err(StatusCode::INTERNAL_SERVER_ERROR)
-        },
+        }
     }
 }
 async fn get_stats() -> Json<serde_json::Value> {

@@ -90,7 +90,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     Ok(Some(tid)) => tid,
                                     _ => {
                                         // Parent not found or error, start new thread
-                                        match worker_db.create_thread(&metadata.message_id, &metadata.subject, metadata.date).await {
+                                        match worker_db
+                                            .create_thread(
+                                                &metadata.message_id,
+                                                &metadata.subject,
+                                                metadata.date,
+                                            )
+                                            .await
+                                        {
                                             Ok(tid) => tid,
                                             Err(e) => {
                                                 error!("Failed to create thread: {}", e);
@@ -100,7 +107,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     }
                                 }
                             } else {
-                                match worker_db.create_thread(&metadata.message_id, &metadata.subject, metadata.date).await {
+                                match worker_db
+                                    .create_thread(
+                                        &metadata.message_id,
+                                        &metadata.subject,
+                                        metadata.date,
+                                    )
+                                    .await
+                                {
                                     Ok(tid) => tid,
                                     Err(e) => {
                                         error!("Failed to create thread: {}", e);
@@ -111,15 +125,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // 2. Create Message
                             // TODO: Store body?
-                            if let Err(e) = worker_db.create_message(
-                                &metadata.message_id,
-                                thread_id,
-                                metadata.in_reply_to.as_deref(),
-                                &metadata.author,
-                                &metadata.subject,
-                                metadata.date,
-                                "", // Body not stored yet in this call, usually separate or in patch
-                            ).await {
+                            if let Err(e) = worker_db
+                                .create_message(
+                                    &metadata.message_id,
+                                    thread_id,
+                                    metadata.in_reply_to.as_deref(),
+                                    &metadata.author,
+                                    &metadata.subject,
+                                    metadata.date,
+                                    "", // Body not stored yet in this call, usually separate or in patch
+                                )
+                                .await
+                            {
                                 error!("Failed to create message: {}", e);
                             }
 

@@ -80,8 +80,6 @@ impl Database {
         Ok(())
     }
 
-
-
     pub async fn create_thread(
         &self,
         root_message_id: &str,
@@ -102,8 +100,6 @@ impl Database {
             Err(anyhow::anyhow!("Failed to get thread ID"))
         }
     }
-
-
 
     pub async fn get_thread_id_for_message(&self, message_id: &str) -> Result<Option<i64>> {
         let mut rows = self
@@ -268,10 +264,7 @@ impl Database {
         }
     }
 
-    pub async fn get_patchset_details(
-        &self,
-        id: i64,
-    ) -> Result<Option<serde_json::Value>> {
+    pub async fn get_patchset_details(&self, id: i64) -> Result<Option<serde_json::Value>> {
         let mut rows = self.conn.query(
             "SELECT p.id, p.subject, p.status, p.to_recipients, p.cc_recipients, 
                     b.repo_url, b.branch, b.last_known_commit, p.author, p.date, p.cover_letter_message_id, p.thread_id
@@ -340,7 +333,7 @@ impl Database {
                     libsql::params![tid]
                 ).await?;
                 while let Ok(Some(m)) = msg_rows.next().await {
-                     messages.push(serde_json::json!({
+                    messages.push(serde_json::json!({
                         "message_id": m.get::<String>(0)?,
                         "author": m.get::<Option<String>>(1).ok(),
                         "date": m.get::<Option<i64>>(2).ok(),
