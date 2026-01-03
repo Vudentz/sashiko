@@ -181,6 +181,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         &metadata.cc,
                                         baseline_id,
                                         metadata.version,
+                                        metadata.index,
                                     )
                                     .await
                                 {

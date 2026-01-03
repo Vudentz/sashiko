@@ -206,17 +206,19 @@ impl Database {
         cc: &str,
         baseline_id: Option<i64>,
         version: Option<u32>,
+        part_index: u32,
     ) -> Result<Option<i64>> {
         // Find candidate patchsets in this thread
         let mut rows = self
             .conn
             .query(
-                "SELECT id, date, author, subject FROM patchsets WHERE thread_id = ?",
+                "SELECT id, date, author, subject, subject_index FROM patchsets WHERE thread_id = ?",
                 libsql::params![thread_id],
             )
             .await?;
 
         let mut matched_id = None;
+        let mut existing_subject_index = 9999;
         let mut has_existing_patchsets = false;
         let mut author_exists_in_thread = false;
 
@@ -243,6 +245,7 @@ impl Database {
             // 3. Versions must match (v1 vs v2 are different patchsets)
             if existing_author == author && (date - existing_date).abs() < 900 && v_new == v_old {
                 matched_id = Some(id);
+                existing_subject_index = row.get(4).unwrap_or(9999);
                 break;
             }
         }
@@ -260,11 +263,19 @@ impl Database {
             // Update existing patchset
             // Note: We do NOT update 'date' to prevent the window from creeping. 
             // We assume the existing date (from first received part) is the anchor.
-            // We update other fields that might be better defined now (e.g. subject from cover letter).
+            // We update other fields that might be better defined now (e.g. baseline).
             self.conn.execute(
-                "UPDATE patchsets SET subject = ?, author = ?, total_parts = ?, parser_version = ?, to_recipients = ?, cc_recipients = ?, baseline_id = ? WHERE id = ?",
-                libsql::params![subject, author, total_parts, parser_version, to, cc, baseline_id, id],
+                "UPDATE patchsets SET author = ?, total_parts = ?, parser_version = ?, to_recipients = ?, cc_recipients = ?, baseline_id = ? WHERE id = ?",
+                libsql::params![author, total_parts, parser_version, to, cc, baseline_id, id],
             ).await?;
+
+            // Conditionally update subject: Prefer the one with lowest index (usually 0/N cover letter)
+            if part_index < existing_subject_index {
+                self.conn.execute(
+                    "UPDATE patchsets SET subject = ?, subject_index = ? WHERE id = ?",
+                    libsql::params![subject, part_index, id],
+                ).await?;
+            }
             
             // If this message is explicitly a cover letter (has cover_letter_message_id and index 0 logic from caller passed here as cover_letter_message_id arg),
             // we should update the cover_letter_message_id field.
@@ -281,9 +292,9 @@ impl Database {
         // No match found, create new patchset
         self.conn
             .execute(
-                "INSERT INTO patchsets (thread_id, cover_letter_message_id, subject, author, date, total_parts, received_parts, status, parser_version, to_recipients, cc_recipients, baseline_id) 
-                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Pending', ?, ?, ?, ?)",
-                libsql::params![thread_id, cover_letter_message_id, subject, author, date, total_parts, parser_version, to, cc, baseline_id],
+                "INSERT INTO patchsets (thread_id, cover_letter_message_id, subject, author, date, total_parts, received_parts, status, parser_version, to_recipients, cc_recipients, baseline_id, subject_index) 
+                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Pending', ?, ?, ?, ?, ?)",
+                libsql::params![thread_id, cover_letter_message_id, subject, author, date, total_parts, parser_version, to, cc, baseline_id, part_index],
             )
             .await?;
 
@@ -483,37 +494,50 @@ mod tests {
         // Create a thread
         let thread_id = db.create_thread("root", "Test Thread", 1000).await.unwrap();
 
-        // 1. Create first patchset (Author A, Time 1000, v1)
+        // 1. Create first patchset from Patch 1 (index 1)
+        db.create_message("msg1", thread_id, None, "Author A", "Patch 1", 1000, "").await.unwrap();
         let ps1 = db.create_patchset(
-            thread_id, None, "Patchset 1", "Author A", 1000, 2, 1, "to", "cc", None, Some(1)
+            thread_id, None, "Patch 1", "Author A", 1000, 2, 1, "to", "cc", None, Some(1), 1
         ).await.unwrap();
+        assert!(ps1.is_some());
 
-        // 2. Add another patch to same patchset (Author A, Time 1005, v1)
-        // Should return same ID
+        // 2. Add Cover Letter (index 0)
+        // Should return same ID and update subject to "Cover Letter"
+        db.create_message("root", thread_id, None, "Author A", "Cover Letter", 1005, "").await.unwrap();
         let ps1_update = db.create_patchset(
-            thread_id, None, "Patchset 1", "Author A", 1005, 2, 1, "to", "cc", None, Some(1)
+            thread_id, Some("root"), "Cover Letter", "Author A", 1005, 2, 1, "to", "cc", None, Some(1), 0
         ).await.unwrap();
-        assert_eq!(ps1, ps1_update, "Should match existing patchset based on author and time");
+        assert_eq!(ps1, ps1_update);
 
-        // 3. Create NEW patchset in same thread (Author A, Time 2000 - > 15 mins later)
-        // Should create new ID
+        let list = db.get_patchsets(1, 0).await.unwrap();
+        assert_eq!(list[0].subject.as_deref(), Some("Cover Letter"));
+
+        // 3. Add Patch 2 (index 2)
+        // Should NOT update subject (index 2 > index 0)
+        db.create_message("msg2", thread_id, None, "Author A", "Patch 2", 1006, "").await.unwrap();
+        db.create_patchset(
+            thread_id, None, "Patch 2", "Author A", 1006, 2, 1, "to", "cc", None, Some(1), 2
+        ).await.unwrap();
+
+        let list = db.get_patchsets(1, 0).await.unwrap();
+        assert_eq!(list[0].subject.as_deref(), Some("Cover Letter"));
+
+        // 4. Create NEW patchset in same thread (Author A, Time 2000 - > 15 mins later)
         let ps2 = db.create_patchset(
-            thread_id, None, "Patchset 2", "Author A", 2000, 2, 1, "to", "cc", None, Some(1)
+            thread_id, None, "New Version", "Author A", 2000, 2, 1, "to", "cc", None, Some(1), 0
         ).await.unwrap();
-        assert_ne!(ps1, ps2, "Should create new patchset for later time");
+        assert_ne!(ps1, ps2);
 
-        // 4. Create NEW patchset in same thread (Author B, Time 1000 - same time but diff author)
-        // Should SKIP (return None) because thread belongs to Author A
+        // 5. Create NEW patchset in same thread (Author B, Time 1000 - same time but diff author)
         let ps3 = db.create_patchset(
-            thread_id, None, "Patchset 3", "Author B", 1000, 2, 1, "to", "cc", None, Some(1)
+            thread_id, None, "Other Author", "Author B", 1000, 2, 1, "to", "cc", None, Some(1), 0
         ).await.unwrap();
-        assert!(ps3.is_none(), "Should skip patchset creation for different author in same thread");
+        assert!(ps3.is_none());
 
-        // 5. Create NEW patchset v2 (Author A, Time 1002 - close time, but v2)
-        // Note: We simulate subject containing "v2" implicitly by passing version=Some(2)
+        // 6. Create NEW patchset v2 (Author A, Time 1002 - close time, but v2)
         let ps_v2 = db.create_patchset(
-            thread_id, None, "[PATCH v2] Patchset 1", "Author A", 1002, 2, 1, "to", "cc", None, Some(2)
+            thread_id, None, "[PATCH v2] Patchset 1", "Author A", 1002, 2, 1, "to", "cc", None, Some(2), 0
         ).await.unwrap();
-        assert_ne!(ps1, ps_v2, "Should create new patchset for v2 despite close time");
+        assert_ne!(ps1, ps_v2);
     }
 }

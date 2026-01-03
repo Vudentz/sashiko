@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS patchsets (
     status TEXT DEFAULT 'Pending', -- Pending, Assembled, Applied, Failed, Reviewed
     total_parts INTEGER,
     received_parts INTEGER,
+    subject_index INTEGER DEFAULT 9999,
     baseline_id INTEGER,
     parser_version INTEGER DEFAULT 0,
     to_recipients TEXT,
