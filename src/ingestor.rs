@@ -191,7 +191,9 @@ impl Ingestor {
                 .await?;
 
             if remote_output.status.success() {
-                let current_url = String::from_utf8_lossy(&remote_output.stdout).trim().to_string();
+                let current_url = String::from_utf8_lossy(&remote_output.stdout)
+                    .trim()
+                    .to_string();
                 if current_url != url {
                     info!("Updating remote origin from {} to {}", current_url, url);
                     let set_url_output = Command::new("git")
@@ -204,9 +206,12 @@ impl Ingestor {
                         .arg(url)
                         .output()
                         .await?;
-                    
+
                     if !set_url_output.status.success() {
-                         warn!("Failed to update remote url: {}", String::from_utf8_lossy(&set_url_output.stderr));
+                        warn!(
+                            "Failed to update remote url: {}",
+                            String::from_utf8_lossy(&set_url_output.stderr)
+                        );
                     }
                 }
             }

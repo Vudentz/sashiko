@@ -94,7 +94,9 @@ pub fn parse_email(raw_email: &[u8]) -> Result<(PatchsetMetadata, Option<Patch>)
 
     let body = message.body_text(0).unwrap_or_default().to_string();
 
-    let diff = if body.contains("diff --git") || (body.contains("--- ") && body.contains("+++ ") && body.contains("@@ -")) {
+    let diff = if body.contains("diff --git")
+        || (body.contains("--- ") && body.contains("+++ ") && body.contains("@@ -"))
+    {
         body.clone()
     } else {
         String::new()
@@ -172,7 +174,8 @@ pub fn parse_subject_version(subject: &str) -> Option<u32> {
     // Prefix: Start of string (^), non-alphanumeric char ([^a-z0-9]), or literal "PATCH" (for PATCHvN)
     // Body: v or V followed by digits
     // Suffix: End of string ($) or non-alphanumeric char
-    let re = RE_VER.get_or_init(|| Regex::new(r"(?i)(?:^|[^a-z0-9]|PATCH)v(\d+)(?:[^a-z0-9]|$)").unwrap());
+    let re = RE_VER
+        .get_or_init(|| Regex::new(r"(?i)(?:^|[^a-z0-9]|PATCH)v(\d+)(?:[^a-z0-9]|$)").unwrap());
 
     if let Some(caps) = re.captures(subject) {
         caps.get(1).and_then(|m| m.as_str().parse().ok())
@@ -204,27 +207,35 @@ mod tests {
         // This simulates a reply quoting a patch or sending an inline fixup
         let raw = b"Message-ID: <123>\r\nSubject: Re: [PATCH] fix bug\r\n\r\n> diff --git a/file b/file\n> index...";
         let (meta, _) = parse_email(raw).unwrap();
-        
+
         // This fails with current logic because has_diff is true
-        assert!(!meta.is_patch_or_cover, "Reply with diff should NOT be a patchset");
+        assert!(
+            !meta.is_patch_or_cover,
+            "Reply with diff should NOT be a patchset"
+        );
     }
 
-        #[test]
-        fn test_normal_patch() {
-            let raw = b"Message-ID: <456>\r\nSubject: [PATCH] fix bug\r\n\r\ndiff --git a/file b/file\nindex...";
-            let (meta, _) = parse_email(raw).unwrap();
-            assert!(meta.is_patch_or_cover);
-        }
-    
-        #[test]
-        fn test_single_patch_no_diff_ignored() {
-            let raw = b"Message-ID: <nonpatch>\r\nSubject: [PATCH] discussion\r\n\r\nThis is not a patch";
-            let (meta, _) = parse_email(raw).unwrap();
-            assert!(!meta.is_patch_or_cover, "Single patch without diff should be ignored");
-        }
-    
-        #[test]
-        fn test_cover_letter() {        let raw = b"Message-ID: <789>\r\nSubject: [PATCH 0/5] fix bug\r\n\r\nCover letter body";
+    #[test]
+    fn test_normal_patch() {
+        let raw = b"Message-ID: <456>\r\nSubject: [PATCH] fix bug\r\n\r\ndiff --git a/file b/file\nindex...";
+        let (meta, _) = parse_email(raw).unwrap();
+        assert!(meta.is_patch_or_cover);
+    }
+
+    #[test]
+    fn test_single_patch_no_diff_ignored() {
+        let raw =
+            b"Message-ID: <nonpatch>\r\nSubject: [PATCH] discussion\r\n\r\nThis is not a patch";
+        let (meta, _) = parse_email(raw).unwrap();
+        assert!(
+            !meta.is_patch_or_cover,
+            "Single patch without diff should be ignored"
+        );
+    }
+
+    #[test]
+    fn test_cover_letter() {
+        let raw = b"Message-ID: <789>\r\nSubject: [PATCH 0/5] fix bug\r\n\r\nCover letter body";
         let (meta, _) = parse_email(raw).unwrap();
         assert!(meta.is_patch_or_cover);
     }

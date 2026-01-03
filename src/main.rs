@@ -86,18 +86,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Ok((metadata, patch_opt)) => {
                             // 1. Thread Resolution
                             let thread_id = if let Some(ref reply_to) = metadata.in_reply_to {
-                                match worker_db.ensure_thread_for_message(reply_to, metadata.date).await {
+                                match worker_db
+                                    .ensure_thread_for_message(reply_to, metadata.date)
+                                    .await
+                                {
                                     Ok(tid) => tid,
                                     Err(e) => {
-                                        error!("Failed to ensure thread for parent {}: {}", reply_to, e);
+                                        error!(
+                                            "Failed to ensure thread for parent {}: {}",
+                                            reply_to, e
+                                        );
                                         continue;
                                     }
                                 }
                             } else {
-                                match worker_db.ensure_thread_for_message(&metadata.message_id, metadata.date).await {
+                                match worker_db
+                                    .ensure_thread_for_message(&metadata.message_id, metadata.date)
+                                    .await
+                                {
                                     Ok(tid) => tid,
                                     Err(e) => {
-                                        error!("Failed to ensure thread for self {}: {}", metadata.message_id, e);
+                                        error!(
+                                            "Failed to ensure thread for self {}: {}",
+                                            metadata.message_id, e
+                                        );
                                         continue;
                                     }
                                 }
@@ -201,7 +213,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                     Ok(None) => {
-                                        info!("Skipped patchset creation (reply mismatch or duplicate) for {}", metadata.message_id);
+                                        info!(
+                                            "Skipped patchset creation (reply mismatch or duplicate) for {}",
+                                            metadata.message_id
+                                        );
                                     }
                                     Err(e) => {
                                         error!("Failed to save patchset: {}", e);
@@ -213,7 +228,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 // but for now, the prompt focuses on displaying patchsets.
                                 // The relationships are: Message -> Thread, Patchset -> Thread.
                                 // So we can find replies via Thread ID.
-                                info!("Skipping patchset creation/update for non-patch message: {}", metadata.message_id);
+                                info!(
+                                    "Skipping patchset creation/update for non-patch message: {}",
+                                    metadata.message_id
+                                );
                             }
                         }
 

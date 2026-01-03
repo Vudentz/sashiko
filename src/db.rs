@@ -125,8 +125,10 @@ impl Database {
         }
 
         // 2. Not found, create new thread and placeholder message
-        let thread_id = self.create_thread(message_id, "(placeholder)", date).await?;
-        
+        let thread_id = self
+            .create_thread(message_id, "(placeholder)", date)
+            .await?;
+
         self.create_message(
             message_id,
             thread_id,
@@ -135,7 +137,8 @@ impl Database {
             "(placeholder)",
             date,
             "",
-        ).await?;
+        )
+        .await?;
 
         Ok(thread_id)
     }
@@ -154,11 +157,11 @@ impl Database {
         // Use INSERT OR REPLACE to handle updating placeholders
         // But we want to preserve thread_id if it was set by placeholder (which is correct).
         // Actually, if we are "creating" the real message now, we should overwrite the placeholder fields.
-        // But we must ensure we keep the same thread_id if it exists? 
+        // But we must ensure we keep the same thread_id if it exists?
         // No, the caller (main.rs) resolves thread_id before calling create_message.
         // If we found a placeholder, we use its thread_id.
         // So here we just upsert.
-        
+
         // However, if we blindly REPLACE, we might change the thread_id if we passed a different one?
         // But main.rs logic should ensure consistency.
         // Let's use INSERT OR REPLACE.
@@ -237,7 +240,7 @@ impl Database {
 
             // Parse version from existing subject
             let existing_version = crate::patch::parse_subject_version(&existing_subject);
-            
+
             // Matching logic:
             // 1. Author must match
             // 2. Time must be close (within 24 hours / 86400s)
@@ -249,16 +252,16 @@ impl Database {
             //    [PATCH] A and [PATCH] A (resend) should merge.
             //    So for total_parts=1, we require subject equality (ignoring prefixes handled by parser, but we have raw subjects here).
             //    Let's check if subjects are "similar" or just enforce strictness for total=1.
-            
+
             let versions_compatible = match (version, existing_version) {
                 (Some(a), Some(b)) => a == b,
-                _ => true, 
+                _ => true,
             };
 
             let is_singleton = total_parts == 1;
             // For singletons, we require the subject to be somewhat similar to avoid merging unrelated patches.
-            // Simple check: strict equality of the non-prefix part? 
-            // Or just: if total=1, don't merge if received_parts >= 1 (already full)? 
+            // Simple check: strict equality of the non-prefix part?
+            // Or just: if total=1, don't merge if received_parts >= 1 (already full)?
             // But what if it's a resend?
             // Safer: For total=1, require subject match.
             // But subjects might differ slightly "Fix A" vs "Fix A v2".
@@ -270,25 +273,30 @@ impl Database {
                 if subject == existing_subject {
                     true
                 } else {
-                     // Allow merging 0/1 (cover) and 1/1 (patch) even if subjects differ
-                     (part_index == 0 && existing_subject_index == 1) || (part_index == 1 && existing_subject_index == 0)
+                    // Allow merging 0/1 (cover) and 1/1 (patch) even if subjects differ
+                    (part_index == 0 && existing_subject_index == 1)
+                        || (part_index == 1 && existing_subject_index == 0)
                 }
             } else {
                 true // For series, we rely on 1/N, 2/N pattern and author/time.
             };
 
-            if existing_author == author 
-                && (date - existing_date).abs() < 86400 
-                && versions_compatible 
+            if existing_author == author
+                && (date - existing_date).abs() < 86400
+                && versions_compatible
                 && total_parts == existing_total
-                && subject_match {
+                && subject_match
+            {
                 matches.push((id, existing_subject_index));
             }
         }
 
         // Enforce Same Sender constraint
         if has_existing_patchsets && !author_exists_in_thread {
-            info!("Skipping patchset creation for thread {} author '{}': different from existing patchset authors", thread_id, author);
+            info!(
+                "Skipping patchset creation for thread {} author '{}': different from existing patchset authors",
+                thread_id, author
+            );
             return Ok(None);
         }
 
@@ -296,7 +304,7 @@ impl Database {
             // Sort matches to pick the "best" one to keep (e.g. oldest ID or one with lowest subject index)
             // Let's keep the one with the lowest ID (created first)
             matches.sort_by_key(|k| k.0);
-            
+
             let target_id = matches[0].0;
             let mut current_subject_index = matches[0].1;
 
@@ -304,23 +312,27 @@ impl Database {
             for (merge_from_id, merge_subject_index) in matches.iter().skip(1) {
                 let merge_from_id = *merge_from_id;
                 info!("Merging patchset {} into {}", merge_from_id, target_id);
-                
+
                 // Reassign patches
-                self.conn.execute(
-                    "UPDATE OR IGNORE patches SET patchset_id = ? WHERE patchset_id = ?",
-                    libsql::params![target_id, merge_from_id]
-                ).await?;
-                
+                self.conn
+                    .execute(
+                        "UPDATE OR IGNORE patches SET patchset_id = ? WHERE patchset_id = ?",
+                        libsql::params![target_id, merge_from_id],
+                    )
+                    .await?;
+
                 // If the merged patchset had a better subject index, track it
                 if *merge_subject_index < current_subject_index {
                     current_subject_index = *merge_subject_index;
                 }
 
                 // Delete the merged patchset
-                self.conn.execute(
-                    "DELETE FROM patchsets WHERE id = ?",
-                    libsql::params![merge_from_id]
-                ).await?;
+                self.conn
+                    .execute(
+                        "DELETE FROM patchsets WHERE id = ?",
+                        libsql::params![merge_from_id],
+                    )
+                    .await?;
             }
 
             // Update the target patchset
@@ -332,10 +344,12 @@ impl Database {
             // Conditionally update subject
             // Note: We check against the best index found among all merged sets OR the new part_index
             if part_index < current_subject_index {
-                self.conn.execute(
-                    "UPDATE patchsets SET subject = ?, subject_index = ? WHERE id = ?",
-                    libsql::params![subject, part_index, target_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE patchsets SET subject = ?, subject_index = ? WHERE id = ?",
+                        libsql::params![subject, part_index, target_id],
+                    )
+                    .await?;
             } else if matches.len() > 1 {
                 // If we merged, we might need to update the subject index of the target to the best one we found
                 // But we don't have the subject string from the merged one easily available here.
@@ -348,16 +362,18 @@ impl Database {
                 // But we lost it.
                 // TODO: Optimize merge subject selection. For now, this is better than duplicates.
             }
-            
+
             if let Some(clid) = cover_letter_message_id {
-                 self.conn.execute(
-                    "UPDATE patchsets SET cover_letter_message_id = ? WHERE id = ?",
-                    libsql::params![clid, target_id],
-                ).await?;
+                self.conn
+                    .execute(
+                        "UPDATE patchsets SET cover_letter_message_id = ? WHERE id = ?",
+                        libsql::params![clid, target_id],
+                    )
+                    .await?;
             }
-            
+
             // Recalculate received parts for target (in case we merged)
-             self.conn
+            self.conn
             .execute(
                 "UPDATE patchsets SET received_parts = (SELECT COUNT(*) FROM patches WHERE patchset_id = ?) WHERE id = ?",
                 libsql::params![target_id, target_id],
@@ -582,18 +598,58 @@ mod tests {
         let thread_id = db.create_thread("root", "Test Thread", 1000).await.unwrap();
 
         // 1. Create first patchset from Patch 1 (index 1)
-        db.create_message("msg1", thread_id, None, "Author A", "Patch 1", 1000, "").await.unwrap();
-        let ps1 = db.create_patchset(
-            thread_id, None, "Patch 1", "Author A", 1000, 2, 1, "to", "cc", None, Some(1), 1
-        ).await.unwrap();
+        db.create_message("msg1", thread_id, None, "Author A", "Patch 1", 1000, "")
+            .await
+            .unwrap();
+        let ps1 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "Patch 1",
+                "Author A",
+                1000,
+                2,
+                1,
+                "to",
+                "cc",
+                None,
+                Some(1),
+                1,
+            )
+            .await
+            .unwrap();
         assert!(ps1.is_some());
 
         // 2. Add Cover Letter (index 0)
         // Should return same ID and update subject to "Cover Letter"
-        db.create_message("root", thread_id, None, "Author A", "Cover Letter", 1005, "").await.unwrap();
-        let ps1_update = db.create_patchset(
-            thread_id, Some("root"), "Cover Letter", "Author A", 1005, 2, 1, "to", "cc", None, Some(1), 0
-        ).await.unwrap();
+        db.create_message(
+            "root",
+            thread_id,
+            None,
+            "Author A",
+            "Cover Letter",
+            1005,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps1_update = db
+            .create_patchset(
+                thread_id,
+                Some("root"),
+                "Cover Letter",
+                "Author A",
+                1005,
+                2,
+                1,
+                "to",
+                "cc",
+                None,
+                Some(1),
+                0,
+            )
+            .await
+            .unwrap();
         assert_eq!(ps1, ps1_update);
 
         let list = db.get_patchsets(1, 0).await.unwrap();
@@ -601,38 +657,125 @@ mod tests {
 
         // 3. Add Patch 2 (index 2)
         // Should NOT update subject (index 2 > index 0)
-        db.create_message("msg2", thread_id, None, "Author A", "Patch 2", 1006, "").await.unwrap();
+        db.create_message("msg2", thread_id, None, "Author A", "Patch 2", 1006, "")
+            .await
+            .unwrap();
         db.create_patchset(
-            thread_id, None, "Patch 2", "Author A", 1006, 2, 1, "to", "cc", None, Some(1), 2
-        ).await.unwrap();
+            thread_id,
+            None,
+            "Patch 2",
+            "Author A",
+            1006,
+            2,
+            1,
+            "to",
+            "cc",
+            None,
+            Some(1),
+            2,
+        )
+        .await
+        .unwrap();
 
         let list = db.get_patchsets(1, 0).await.unwrap();
         assert_eq!(list[0].subject.as_deref(), Some("Cover Letter"));
 
         // 4. Create NEW patchset in same thread (Author B, Time 1000 - same time but diff author)
-        let ps3 = db.create_patchset(
-            thread_id, None, "Other Author", "Author B", 1000, 2, 1, "to", "cc", None, Some(1), 0
-        ).await.unwrap();
+        let ps3 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "Other Author",
+                "Author B",
+                1000,
+                2,
+                1,
+                "to",
+                "cc",
+                None,
+                Some(1),
+                0,
+            )
+            .await
+            .unwrap();
         assert!(ps3.is_none());
 
         // 5. Create NEW patchset v2 (Author A, Time 1002 - close time, but v2)
         // Under new logic "Implicit matches Explicit", this SHOULD merge with ps1 (Implicit)
         // because time/author/total match.
-        let ps_v2 = db.create_patchset(
-            thread_id, None, "[PATCH v2] Patchset 1", "Author A", 1002, 2, 1, "to", "cc", None, Some(2), 0
-        ).await.unwrap();
-        assert_eq!(ps1, ps_v2, "Implicit v1 should merge with v2 if time/author match");
+        let ps_v2 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH v2] Patchset 1",
+                "Author A",
+                1002,
+                2,
+                1,
+                "to",
+                "cc",
+                None,
+                Some(2),
+                0,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            ps1, ps_v2,
+            "Implicit v1 should merge with v2 if time/author match"
+        );
 
         // 7. Test Merging: Create disjoint patchsets then bridge them
-        let t_merge = db.create_thread("root_merge", "Merge Test", 10000).await.unwrap();
-        
+        let t_merge = db
+            .create_thread("root_merge", "Merge Test", 10000)
+            .await
+            .unwrap();
+
         // PS A (Time 10000)
-        db.create_message("m1", t_merge, None, "Merger", "P1", 10000, "").await.unwrap();
-        let psa = db.create_patchset(t_merge, None, "Series", "Merger", 10000, 3, 1, "", "", None, Some(1), 1).await.unwrap().unwrap();
-        
+        db.create_message("m1", t_merge, None, "Merger", "P1", 10000, "")
+            .await
+            .unwrap();
+        let psa = db
+            .create_patchset(
+                t_merge,
+                None,
+                "Series",
+                "Merger",
+                10000,
+                3,
+                1,
+                "",
+                "",
+                None,
+                Some(1),
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
         // PS B (Time 200000) - 190000s diff > 86400s limit -> New PS
-        db.create_message("m2", t_merge, None, "Merger", "P3", 200000, "").await.unwrap();
-        let psb = db.create_patchset(t_merge, None, "Series", "Merger", 200000, 3, 1, "", "", None, Some(1), 3).await.unwrap().unwrap();
+        db.create_message("m2", t_merge, None, "Merger", "P3", 200000, "")
+            .await
+            .unwrap();
+        let psb = db
+            .create_patchset(
+                t_merge,
+                None,
+                "Series",
+                "Merger",
+                200000,
+                3,
+                1,
+                "",
+                "",
+                None,
+                Some(1),
+                3,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(psa, psb);
 
         // PS C (Time 100000) - 90000s diff from A (>86400), 100000s diff from B (>86400)
@@ -649,24 +792,65 @@ mod tests {
         // Diff(A, C) = 50000 < 86400. Match A.
         // Diff(B, C) = 110000 - 60000 = 50000 < 86400. Match B.
         // So C bridges A and B.
-        
-        db.create_message("m2_fixed", t_merge, None, "Merger", "P3_fixed", 120000, "").await.unwrap(); // 120000. Diff 110000 > 86400.
-        let psb_fixed = db.create_patchset(t_merge, None, "Series", "Merger", 120000, 3, 1, "", "", None, Some(1), 3).await.unwrap().unwrap();
+
+        db.create_message("m2_fixed", t_merge, None, "Merger", "P3_fixed", 120000, "")
+            .await
+            .unwrap(); // 120000. Diff 110000 > 86400.
+        let psb_fixed = db
+            .create_patchset(
+                t_merge,
+                None,
+                "Series",
+                "Merger",
+                120000,
+                3,
+                1,
+                "",
+                "",
+                None,
+                Some(1),
+                3,
+            )
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(psa, psb_fixed);
 
         // PS C (Time 65000)
         // Diff(A, C) = 55000 < 86400.
         // Diff(B, C) = 120000 - 65000 = 55000 < 86400.
-        db.create_message("m3", t_merge, None, "Merger", "P2", 65000, "").await.unwrap();
-        let psc = db.create_patchset(t_merge, None, "Series", "Merger", 65000, 3, 1, "", "", None, Some(1), 2).await.unwrap().unwrap();
-        
+        db.create_message("m3", t_merge, None, "Merger", "P2", 65000, "")
+            .await
+            .unwrap();
+        let psc = db
+            .create_patchset(
+                t_merge,
+                None,
+                "Series",
+                "Merger",
+                65000,
+                3,
+                1,
+                "",
+                "",
+                None,
+                Some(1),
+                2,
+            )
+            .await
+            .unwrap()
+            .unwrap();
+
         assert_eq!(psc, psa);
     }
 
     #[tokio::test]
     async fn test_five_patch_series_merging() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_5", "Five Patch Series", 20000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_5", "Five Patch Series", 20000)
+            .await
+            .unwrap();
         let author = "Series Author <author@example.com>";
 
         // Patches arrive in order: 1/5, 0/5, 2/5, 4/5, 3/5
@@ -678,61 +862,95 @@ mod tests {
             let subject = format!("[PATCH {}/5] Feature part {}", idx, idx);
             let time = 20000 + (i as i64 * 10); // 10s apart
 
-            db.create_message(&msg_id, thread_id, None, author, &subject, time, "").await.unwrap();
-            let ps_id = db.create_patchset(
-                thread_id,
-                if idx == 0 { Some(&msg_id) } else { None },
-                &subject,
-                author,
-                time,
-                5,
-                1,
-                "to",
-                "cc",
-                None,
-                None,
-                idx as u32
-            ).await.unwrap().unwrap();
-            
+            db.create_message(&msg_id, thread_id, None, author, &subject, time, "")
+                .await
+                .unwrap();
+            let ps_id = db
+                .create_patchset(
+                    thread_id,
+                    if idx == 0 { Some(&msg_id) } else { None },
+                    &subject,
+                    author,
+                    time,
+                    5,
+                    1,
+                    "to",
+                    "cc",
+                    None,
+                    None,
+                    idx as u32,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+
             patchset_ids.push(ps_id);
         }
 
         // All IDs should be the same
         let first_id = patchset_ids[0];
         for id in patchset_ids {
-            assert_eq!(id, first_id, "All parts of the same series should share the same patchset ID");
+            assert_eq!(
+                id, first_id,
+                "All parts of the same series should share the same patchset ID"
+            );
         }
 
         // Verify the final subject is the cover letter (index 0)
         let list = db.get_patchsets(1, 0).await.unwrap();
-        assert_eq!(list[0].subject.as_deref(), Some("[PATCH 0/5] Feature part 0"));
+        assert_eq!(
+            list[0].subject.as_deref(),
+            Some("[PATCH 0/5] Feature part 0")
+        );
     }
 
     #[tokio::test]
     async fn test_patchset_status_transition() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_status", "Status Test", 60000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_status", "Status Test", 60000)
+            .await
+            .unwrap();
         let author = "Status Author <status@example.com>";
 
         // 1. Create patchset with 2 parts. received=0 initially (cover letter doesn't count as received part in DB logic usually, but here we insert it)
         // Wait, create_patchset creates the set. create_patch updates received count.
         // We call create_patchset first.
-        let ps_id = db.create_patchset(
-            thread_id, None, "Status Test", author, 60000, 2, 1, "", "", None, None, 1
-        ).await.unwrap().unwrap();
+        let ps_id = db
+            .create_patchset(
+                thread_id,
+                None,
+                "Status Test",
+                author,
+                60000,
+                2,
+                1,
+                "",
+                "",
+                None,
+                None,
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // Check initial status
         let list = db.get_patchsets(1, 0).await.unwrap();
         assert_eq!(list[0].status.as_deref(), Some("Incomplete"));
 
         // 2. Add Patch 1. received=1. Total=2. Status should be Incomplete.
-        db.create_message("msg_1", thread_id, None, author, "Part 1", 60005, "").await.unwrap();
+        db.create_message("msg_1", thread_id, None, author, "Part 1", 60005, "")
+            .await
+            .unwrap();
         db.create_patch(ps_id, "msg_1", 1, "diff").await.unwrap();
         let list = db.get_patchsets(1, 0).await.unwrap();
         assert_eq!(list[0].status.as_deref(), Some("Incomplete"));
 
         // 3. Add Patch 2. received=2. Total=2. Status should transition to Pending.
-        db.create_message("msg_2", thread_id, None, author, "Part 2", 60010, "").await.unwrap();
+        db.create_message("msg_2", thread_id, None, author, "Part 2", 60010, "")
+            .await
+            .unwrap();
         db.create_patch(ps_id, "msg_2", 2, "diff").await.unwrap();
         let list = db.get_patchsets(1, 0).await.unwrap();
         assert_eq!(list[0].status.as_deref(), Some("Pending"));
@@ -741,7 +959,10 @@ mod tests {
     #[tokio::test]
     async fn test_implicit_version_merging() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_v6", "Version 6 Series", 30000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_v6", "Version 6 Series", 30000)
+            .await
+            .unwrap();
         let author = "Author V6 <v6@example.com>";
 
         // Case: Cover letter has v6, but patches don't say v6 (implicitly v1?)
@@ -749,110 +970,393 @@ mod tests {
         // However, strict version check prevents this if one is v6 and other is v1.
         // But the prompt says "They should be merged".
         // This implies loose version matching if one side is v1 (default)?
-        
+
         // 1. Cover letter: [PATCH 00/33 v6] -> v6
-        db.create_message("msg_00", thread_id, None, author, "[PATCH 00/33 v6] Cover", 30000, "").await.unwrap();
-        let ps_cover = db.create_patchset(
-            thread_id, Some("msg_00"), "[PATCH 00/33 v6] Cover", author, 30000, 33, 1, "", "", None, Some(6), 0
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_00",
+            thread_id,
+            None,
+            author,
+            "[PATCH 00/33 v6] Cover",
+            30000,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_cover = db
+            .create_patchset(
+                thread_id,
+                Some("msg_00"),
+                "[PATCH 00/33 v6] Cover",
+                author,
+                30000,
+                33,
+                1,
+                "",
+                "",
+                None,
+                Some(6),
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // 2. Patch 1: [PATCH 01/33] -> v1 (implicit) -> Pass None
-        db.create_message("msg_01", thread_id, None, author, "[PATCH 01/33] Part 1", 30005, "").await.unwrap();
-        let ps_p1 = db.create_patchset(
-            thread_id, None, "[PATCH 01/33] Part 1", author, 30005, 33, 1, "", "", None, None, 1
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_01",
+            thread_id,
+            None,
+            author,
+            "[PATCH 01/33] Part 1",
+            30005,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_p1 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH 01/33] Part 1",
+                author,
+                30005,
+                33,
+                1,
+                "",
+                "",
+                None,
+                None,
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // With strict checking, this might fail (assert_eq will panic if not merged).
         // If it fails, we need to relax the check in `create_patchset`.
-        assert_eq!(ps_cover, ps_p1, "Should merge explicit v6 cover with implicit v1 patch if context matches");
+        assert_eq!(
+            ps_cover, ps_p1,
+            "Should merge explicit v6 cover with implicit v1 patch if context matches"
+        );
     }
 
     #[tokio::test]
     async fn test_unrelated_singletons_no_merge() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_single", "Singletons", 60000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_single", "Singletons", 60000)
+            .await
+            .unwrap();
         let author = "Author S <s@example.com>";
 
         // Patch A
-        db.create_message("msg_a", thread_id, None, author, "[PATCH] Fix A", 60000, "").await.unwrap();
-        let ps_a = db.create_patchset(
-            thread_id, None, "[PATCH] Fix A", author, 60000, 1, 1, "", "", None, None, 1
-        ).await.unwrap().unwrap();
+        db.create_message("msg_a", thread_id, None, author, "[PATCH] Fix A", 60000, "")
+            .await
+            .unwrap();
+        let ps_a = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH] Fix A",
+                author,
+                60000,
+                1,
+                1,
+                "",
+                "",
+                None,
+                None,
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // Patch B (Close time, same author, implicit version, total=1)
-        db.create_message("msg_b", thread_id, None, author, "[PATCH] Fix B", 60005, "").await.unwrap();
-        let ps_b = db.create_patchset(
-            thread_id, None, "[PATCH] Fix B", author, 60005, 1, 1, "", "", None, None, 1
-        ).await.unwrap().unwrap();
+        db.create_message("msg_b", thread_id, None, author, "[PATCH] Fix B", 60005, "")
+            .await
+            .unwrap();
+        let ps_b = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH] Fix B",
+                author,
+                60005,
+                1,
+                1,
+                "",
+                "",
+                None,
+                None,
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_ne!(ps_a, ps_b, "Should NOT merge unrelated singletons even if author/time match");
+        assert_ne!(
+            ps_a, ps_b,
+            "Should NOT merge unrelated singletons even if author/time match"
+        );
     }
 
     #[tokio::test]
     async fn test_singleton_cover_patch_merge() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_1of1", "Singleton Series", 60000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_1of1", "Singleton Series", 60000)
+            .await
+            .unwrap();
         let author = "Author 1of1 <1@example.com>";
 
         // Cover: [PATCH 0/1] Subject A
-        db.create_message("msg_0", thread_id, None, author, "[PATCH 0/1] Subject A", 60000, "").await.unwrap();
-        let ps_0 = db.create_patchset(
-            thread_id, Some("msg_0"), "[PATCH 0/1] Subject A", author, 60000, 1, 1, "", "", None, None, 0
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_0",
+            thread_id,
+            None,
+            author,
+            "[PATCH 0/1] Subject A",
+            60000,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_0 = db
+            .create_patchset(
+                thread_id,
+                Some("msg_0"),
+                "[PATCH 0/1] Subject A",
+                author,
+                60000,
+                1,
+                1,
+                "",
+                "",
+                None,
+                None,
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // Patch: [PATCH 1/1] Subject B (Different subject)
-        db.create_message("msg_1", thread_id, None, author, "[PATCH 1/1] Subject B", 60005, "").await.unwrap();
-        let ps_1 = db.create_patchset(
-            thread_id, None, "[PATCH 1/1] Subject B", author, 60005, 1, 1, "", "", None, None, 1
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_1",
+            thread_id,
+            None,
+            author,
+            "[PATCH 1/1] Subject B",
+            60005,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_1 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH 1/1] Subject B",
+                author,
+                60005,
+                1,
+                1,
+                "",
+                "",
+                None,
+                None,
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_eq!(ps_0, ps_1, "Should merge 0/1 and 1/1 even if subjects differ");
+        assert_eq!(
+            ps_0, ps_1,
+            "Should merge 0/1 and 1/1 even if subjects differ"
+        );
     }
 
     #[tokio::test]
     async fn test_version_mismatch_no_merge() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_diff_ver", "Version Mismatch", 40000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_diff_ver", "Version Mismatch", 40000)
+            .await
+            .unwrap();
         let author = "Author Diff <diff@example.com>";
 
         // v5
-        db.create_message("msg_v5", thread_id, None, author, "[PATCH v5 1/2] Part 1", 40000, "").await.unwrap();
-        let ps_v5 = db.create_patchset(
-            thread_id, None, "[PATCH v5 1/2] Part 1", author, 40000, 2, 1, "", "", None, Some(5), 1
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_v5",
+            thread_id,
+            None,
+            author,
+            "[PATCH v5 1/2] Part 1",
+            40000,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_v5 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH v5 1/2] Part 1",
+                author,
+                40000,
+                2,
+                1,
+                "",
+                "",
+                None,
+                Some(5),
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // v6 (Close time)
-        db.create_message("msg_v6", thread_id, None, author, "[PATCH v6 1/2] Part 1", 40010, "").await.unwrap();
-        let ps_v6 = db.create_patchset(
-            thread_id, None, "[PATCH v6 1/2] Part 1", author, 40010, 2, 1, "", "", None, Some(6), 1
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "msg_v6",
+            thread_id,
+            None,
+            author,
+            "[PATCH v6 1/2] Part 1",
+            40010,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_v6 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH v6 1/2] Part 1",
+                author,
+                40010,
+                2,
+                1,
+                "",
+                "",
+                None,
+                Some(6),
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
-        assert_ne!(ps_v5, ps_v6, "Should NOT merge different explicit versions (v5 vs v6)");
+        assert_ne!(
+            ps_v5, ps_v6,
+            "Should NOT merge different explicit versions (v5 vs v6)"
+        );
     }
 
     #[tokio::test]
     async fn test_v3_series_fragmentation() {
         let db = setup_db().await;
-        let thread_id = db.create_thread("root_v3", "v3 Series", 50000).await.unwrap();
+        let thread_id = db
+            .create_thread("root_v3", "v3 Series", 50000)
+            .await
+            .unwrap();
         let author = "Author V3 <v3@example.com>";
 
         // 1. [PATCH v3 0/2] (Cover)
-        db.create_message("v3_0", thread_id, None, author, "[PATCH v3 0/2] Cover", 50000, "").await.unwrap();
-        let ps_0 = db.create_patchset(
-            thread_id, Some("v3_0"), "[PATCH v3 0/2] Cover", author, 50000, 2, 1, "", "", None, Some(3), 0
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "v3_0",
+            thread_id,
+            None,
+            author,
+            "[PATCH v3 0/2] Cover",
+            50000,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_0 = db
+            .create_patchset(
+                thread_id,
+                Some("v3_0"),
+                "[PATCH v3 0/2] Cover",
+                author,
+                50000,
+                2,
+                1,
+                "",
+                "",
+                None,
+                Some(3),
+                0,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // 2. [PATCH v3 1/2]
-        db.create_message("v3_1", thread_id, None, author, "[PATCH v3 1/2] Part 1", 50005, "").await.unwrap();
-        let ps_1 = db.create_patchset(
-            thread_id, None, "[PATCH v3 1/2] Part 1", author, 50005, 2, 1, "", "", None, Some(3), 1
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "v3_1",
+            thread_id,
+            None,
+            author,
+            "[PATCH v3 1/2] Part 1",
+            50005,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_1 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH v3 1/2] Part 1",
+                author,
+                50005,
+                2,
+                1,
+                "",
+                "",
+                None,
+                Some(3),
+                1,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         // 3. [PATCH v3 2/2]
-        db.create_message("v3_2", thread_id, None, author, "[PATCH v3 2/2] Part 2", 50010, "").await.unwrap();
-        let ps_2 = db.create_patchset(
-            thread_id, None, "[PATCH v3 2/2] Part 2", author, 50010, 2, 1, "", "", None, Some(3), 2
-        ).await.unwrap().unwrap();
+        db.create_message(
+            "v3_2",
+            thread_id,
+            None,
+            author,
+            "[PATCH v3 2/2] Part 2",
+            50010,
+            "",
+        )
+        .await
+        .unwrap();
+        let ps_2 = db
+            .create_patchset(
+                thread_id,
+                None,
+                "[PATCH v3 2/2] Part 2",
+                author,
+                50010,
+                2,
+                1,
+                "",
+                "",
+                None,
+                Some(3),
+                2,
+            )
+            .await
+            .unwrap()
+            .unwrap();
 
         assert_eq!(ps_0, ps_1, "Patch 1 should merge with Cover");
         assert_eq!(ps_0, ps_2, "Patch 2 should merge with Cover");
