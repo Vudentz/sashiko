@@ -196,22 +196,7 @@ async fn get_message(
                     for path in candidate_paths {
                         if let Ok(raw) = crate::git_ops::read_blob(&path, hash).await {
                             if let Ok((metadata, _)) = crate::patch::parse_email(&raw) {
-                                details.body = Some(metadata.body.clone());
-
-                                // Optimization: Update DB to avoid future lookups
-                                // We spawn this to not block the response
-                                let db = state.db.clone();
-                                let body = metadata.body;
-                                let mid = id_val;
-                                tokio::spawn(async move {
-                                    if let Err(e) = db.update_message_body(mid, &body).await {
-                                        tracing::warn!(
-                                            "Failed to cache hydrated body for {}: {}",
-                                            mid,
-                                            e
-                                        );
-                                    }
-                                });
+                                details.body = Some(metadata.body);
                                 break;
                             }
                         }
