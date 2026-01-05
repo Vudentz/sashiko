@@ -281,17 +281,11 @@ pub async fn ensure_remote(
         .map(|s| s.success())
         .unwrap_or(false);
 
-    let should_fetch = if just_added || !head_exists {
+    let should_fetch = if just_added || !head_exists || force_fetch {
         true
     } else {
         match age {
-            Some(a) => {
-                if force_fetch {
-                    a > std::time::Duration::from_secs(3600)
-                } else {
-                    a > std::time::Duration::from_secs(12 * 3600)
-                }
-            }
+            Some(a) => a > std::time::Duration::from_secs(12 * 3600),
             None => true,
         }
     };
