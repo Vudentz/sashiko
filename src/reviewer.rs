@@ -107,7 +107,7 @@ impl Reviewer {
                     "patches": patches_json
                 });
 
-                match run_review_tool(&input_payload, &settings).await {
+                match run_review_tool(patchset_id, &input_payload, &settings, db.clone()).await {
                     Ok(status) => {
                         info!("Review finished for {}: {}", patchset_id, status);
                         if let Err(e) = db.update_patchset_status(patchset_id, &status).await {
@@ -128,7 +128,7 @@ impl Reviewer {
     }
 }
 
-async fn run_review_tool(input_payload: &serde_json::Value, settings: &Settings) -> Result<String> {
+async fn run_review_tool(patchset_id: i64, input_payload: &serde_json::Value, settings: &Settings, db: Arc<Database>) -> Result<String> {
     let exe_path = std::env::current_exe()?;
     let bin_dir = exe_path.parent().unwrap_or_else(|| std::path::Path::new("."));
     let review_bin = bin_dir.join("review");
@@ -175,6 +175,18 @@ async fn run_review_tool(input_payload: &serde_json::Value, settings: &Settings)
     
     // Check if all patches applied
     let patches = json["patches"].as_array().ok_or_else(|| anyhow::anyhow!("Invalid output JSON: no patches"))?;
+    
+    // Update individual patch status in DB
+    for p in patches {
+        let idx = p["index"].as_i64().unwrap_or(0);
+        let status = p["status"].as_str().unwrap_or("error");
+        let stderr = p["stderr"].as_str();
+        
+        if let Err(e) = db.update_patch_application_status(patchset_id, idx, status, stderr).await {
+             error!("Failed to update patch status for ps={} idx={}: {}", patchset_id, idx, e);
+        }
+    }
+
     let all_applied = patches.iter().all(|p| p["status"] == "applied");
 
     if all_applied {

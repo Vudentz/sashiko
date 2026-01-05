@@ -173,6 +173,12 @@ impl Database {
         let _ = self
             .try_create_index("idx_patchsets_cover_message_id", "patchsets", "cover_letter_message_id")
             .await;
+        let _ = self
+            .try_add_column("patches", "status", "TEXT")
+            .await;
+        let _ = self
+            .try_add_column("patches", "apply_error", "TEXT")
+            .await;
 
         info!("Database schema applied");
         Ok(())
@@ -1153,6 +1159,14 @@ impl Database {
         self.conn.execute(
             "UPDATE patchsets SET status = ? WHERE id = ?",
             libsql::params![status, id],
+        ).await?;
+        Ok(())
+    }
+
+    pub async fn update_patch_application_status(&self, patchset_id: i64, part_index: i64, status: &str, error: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE patches SET status = ?, apply_error = ? WHERE patchset_id = ? AND part_index = ?",
+            libsql::params![status, error, patchset_id, part_index],
         ).await?;
         Ok(())
     }
