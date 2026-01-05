@@ -808,7 +808,7 @@ impl Database {
     ) -> Result<Vec<PatchsetRow>> {
         let (where_clause, params) = self.build_search(query);
         let sql = format!(
-            "SELECT id, subject, status, thread_id, author, date, cover_letter_message_id, total_parts, received_parts FROM patchsets {} ORDER BY id DESC LIMIT ? OFFSET ?",
+            "SELECT id, subject, status, thread_id, author, date, cover_letter_message_id, total_parts, received_parts FROM patchsets {} ORDER BY date DESC LIMIT ? OFFSET ?",
             where_clause
         );
 
