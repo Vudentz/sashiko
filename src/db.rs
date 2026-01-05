@@ -26,6 +26,7 @@ pub struct PatchsetRow {
     pub message_id: Option<String>,
     pub total_parts: Option<u32>,
     pub received_parts: Option<u32>,
+    pub subsystems: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -880,24 +881,20 @@ impl Database {
         query: Option<String>,
     ) -> Result<Vec<PatchsetRow>> {
         let (where_clause, params) = self.build_search(query);
+        // We use p.* alias implicitely by using unqualified names in WHERE which is fine given no collisions.
+        // But for clarity/safety we should alias in FROM.
+        // build_search returns "WHERE author ...".
+        
         let sql = format!(
-            "SELECT id, subject, status, thread_id, author, date, cover_letter_message_id, total_parts, received_parts FROM patchsets {} ORDER BY date DESC LIMIT ? OFFSET ?",
+            "SELECT p.id, p.subject, p.status, p.thread_id, p.author, p.date, p.cover_letter_message_id, p.total_parts, p.received_parts, GROUP_CONCAT(s.name, ',') 
+             FROM patchsets p
+             LEFT JOIN patchsets_subsystems ps ON p.id = ps.patchset_id
+             LEFT JOIN subsystems s ON ps.subsystem_id = s.id
+             {} 
+             GROUP BY p.id
+             ORDER BY p.date DESC LIMIT ? OFFSET ?",
             where_clause
         );
-
-        // Append limit and offset to params.
-        // We need to convert params to a type that libsql accepts.
-        // Since build_search returns Vec<String>, we have to be careful with types.
-        // libsql::params! expects arguments that implement ToSql.
-        // We can pass `params` as a slice of &dyn ToSql if we box them?
-        // Or simpler: construct a generic params vector enum.
-
-        // Actually, mixing String and Integer params in a manual Vec is annoying in Rust strict typing.
-        // Let's use libsql::params::Params::from_iter if available, or just use `libsql::params!` for the static parts
-        // and hack the dynamic parts? No.
-
-        // Let's use `libsql::Statement::query` which takes params.
-        // We will cast everything to `libsql::Value`.
 
         let mut args = Vec::new();
         for p in params {
@@ -910,6 +907,13 @@ impl Database {
 
         let mut patchsets = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
+            let subsystems_str: Option<String> = row.get(9).ok();
+            let subsystems = if let Some(s) = subsystems_str {
+                s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+            } else {
+                Vec::new()
+            };
+
             patchsets.push(PatchsetRow {
                 id: row.get(0)?,
                 subject: row.get(1).ok(),
@@ -920,6 +924,7 @@ impl Database {
                 message_id: row.get(6).ok(),
                 total_parts: row.get(7).ok(),
                 received_parts: row.get(8).ok(),
+                subsystems,
             });
         }
         Ok(patchsets)
@@ -1054,6 +1059,18 @@ impl Database {
                 }));
             }
 
+            // Fetch subsystems
+            let mut subsystems = Vec::new();
+            let mut sub_rows = self.conn.query(
+                "SELECT s.name FROM subsystems s
+                 JOIN patchsets_subsystems ps ON s.id = ps.subsystem_id
+                 WHERE ps.patchset_id = ?",
+                libsql::params![pid],
+            ).await?;
+            while let Ok(Some(row)) = sub_rows.next().await {
+                subsystems.push(row.get::<String>(0)?);
+            }
+
             // Fetch patches with subject and msg_db_id
             let mut patches = Vec::new();
             let mut patch_rows = self
@@ -1109,7 +1126,8 @@ impl Database {
                 "received_parts": received_parts,
                 "reviews": reviews,
                 "patches": patches,
-                "thread": messages
+                "thread": messages,
+                "subsystems": subsystems
             })))
         } else {
             Ok(None)
@@ -1150,6 +1168,7 @@ impl Database {
                 message_id: row.get(6).ok(),
                 total_parts: row.get(7).ok(),
                 received_parts: row.get(8).ok(),
+                subsystems: Vec::new(),
             });
         }
         Ok(patchsets)

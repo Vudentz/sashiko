@@ -14,6 +14,7 @@
         .status-Pending { color: orange; }
         .status-Applied { color: green; }
         .status-Failed { color: red; }
+        .tag { display: inline-block; background: #e0f7fa; color: #006064; padding: 1px 4px; border-radius: 3px; font-size: 0.75em; margin-right: 4px; border: 1px solid #b2ebf2; vertical-align: middle; }
         .reviews-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
         .reviews-table th, .reviews-table td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
         a { color: #007bff; text-decoration: none; }
@@ -185,6 +186,7 @@
                     <div class="kv"><div class="label">Author:</div><div>${data.author || 'unknown'}</div></div>
                     <div class="kv"><div class="label">Date:</div><div>${date}</div></div>
                     <div class="kv"><div class="label">Status:</div><div class="status-${data.status}">${data.status || 'Pending'}</div></div>
+                    <div class="kv"><div class="label">Subsystems:</div><div>${data.subsystems && data.subsystems.length > 0 ? data.subsystems.map(s => `<span class="tag">${s}</span>`).join('') : '-'}</div></div>
                     <div class="kv"><div class="label">Progress:</div><div>${data.received_parts || 0} / ${data.total_parts || 0}</div></div>
                     ${patchesHtml}
                 </div>

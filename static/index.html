@@ -16,6 +16,7 @@
         .status-Reviewing { color: blue; }
         .status-Applied { color: green; }
         .status-Failed { color: red; }
+        .tag { display: inline-block; background: #e0f7fa; color: #006064; padding: 1px 4px; border-radius: 3px; font-size: 0.75em; margin-right: 4px; border: 1px solid #b2ebf2; vertical-align: middle; }
         .copy-btn { cursor: pointer; border: 1px solid #ccc; background: #fff; padding: 2px 5px; border-radius: 3px; font-size: 12px; }
         .copy-btn:hover { background: #eee; }
     </style>
@@ -266,8 +267,13 @@
                     };
                     row.style.cursor = 'pointer';
 
+                    let tagsHtml = '';
+                    if (p.subsystems && p.subsystems.length > 0) {
+                        tagsHtml = '<br>' + p.subsystems.map(s => `<span class="tag">${s}</span>`).join('');
+                    }
+
                     row.innerHTML = `
-                        <td>${p.subject || '(no subject)'}</td>
+                        <td>${p.subject || '(no subject)'}${tagsHtml}</td>
                         <td>${p.author || 'unknown'}</td>
                         <td>${parts}</td>
                         <td>${date}</td>
