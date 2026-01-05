@@ -297,7 +297,28 @@ pub async fn ensure_remote(
     }
 
     // 4. Fetch
-    info!("Fetching remote {}", name);
+    if should_fetch {
+        info!("Fetching remote {}", name);
+        let fetch = Command::new("git")
+            .current_dir(repo_path)
+            .args(["fetch", name])
+            .output()
+            .await?;
+
+        if !fetch.status.success() {
+            warn!(
+                "Failed to fetch remote {}: {}",
+                name,
+                String::from_utf8_lossy(&fetch.stderr)
+            );
+            // We continue even if fetch fails, attempting set-head might still work or fail later
+        } else {
+            // Update timestamp only on success
+            if let Ok(file) = std::fs::File::create(&timestamp_file) {
+                let _ = file.set_len(0);
+            }
+        }
+    }
 
     // Ensure HEAD is set correctly (if we fetched OR if it was missing)
     if should_fetch || !head_exists {
