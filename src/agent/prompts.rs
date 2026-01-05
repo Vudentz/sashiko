@@ -20,7 +20,36 @@ impl PromptRegistry {
             .await
             .unwrap_or_else(|_| "Follow the standard review process.".to_string());
 
-        Ok(format!("{}\n\n{}", identity, workflow))
+        let cot_and_json = r#"
+## Analysis Protocol
+You must not output the review immediately. You must first perform a detailed analysis using the following steps:
+1. **Context Verification**: Identify the modified files and functions. If you need to see the full file content or definition of a function, use `read_file` or `git_grep`. Do not guess.
+2. **Safety Check**: Look for common kernel vulnerabilities (UAF, buffer overflows, race conditions, locking issues).
+3. **Style Check**: Verify adherence to kernel coding style (checkpatch.pl rules).
+
+## Output Format
+You must respond with a valid JSON object. Do not include markdown code blocks (```json ... ```) around the output, just the raw JSON. The JSON must adhere to this schema:
+
+{
+  "analysis_trace": [
+    "string" // Step-by-step reasoning
+  ],
+  "summary": "Brief summary of the patchset",
+  "score": number, // 0-10, where 10 is perfect
+  "verdict": "string", // "Reviewed-by", "Acked-by", "Changes Requested"
+  "findings": [
+    {
+      "file": "string",
+      "line": number,
+      "severity": "string", // "High", "Medium", "Low", "Style"
+      "message": "string", // Technical explanation
+      "suggestion": "string" // Optional: suggested fix
+    }
+  ]
+}
+"#;
+
+        Ok(format!("{}\n\n{}\n{}", identity, workflow, cot_and_json))
     }
 
     pub async fn build_context_prompt(&self, patchset: &Value) -> Result<String> {

@@ -7,7 +7,7 @@ mod integration_test;
 
 use crate::agent::prompts::PromptRegistry;
 use crate::agent::tools::ToolBox;
-use crate::ai::gemini::{Content, FunctionResponse, GeminiClient, GenerateContentRequest, Part};
+use crate::ai::gemini::{Content, FunctionResponse, GeminiClient, GenerateContentRequest, GenerationConfig, Part};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
 use tracing::{info, warn};
@@ -29,7 +29,7 @@ impl Agent {
         }
     }
 
-    pub async fn run(&mut self, patchset: Value) -> Result<String> {
+    pub async fn run(&mut self, patchset: Value) -> Result<Value> {
         let system_prompt = self.prompts.get_system_prompt().await?;
         let context_prompt = self.prompts.build_context_prompt(&patchset).await?;
 
@@ -69,6 +69,11 @@ impl Agent {
                 contents: self.history.clone(),
                 tools: Some(vec![self.tools.get_declarations()]),
                 system_instruction: Some(system_content.clone()),
+                generation_config: Some(GenerationConfig {
+                    response_mime_type: Some("application/json".to_string()),
+                    response_schema: None,
+                    temperature: Some(0.2),
+                }),
             };
 
             info!("Sending request to Gemini...");
@@ -127,7 +132,34 @@ impl Agent {
                 self.history.push(response_content);
                 // Continue loop to get model response to tool outputs
             } else {
-                return Ok(final_text);
+                // Try to clean up markdown code blocks if present (some models still add them despite JSON mode)
+                let clean_text = final_text.trim();
+                let clean_text = if clean_text.starts_with("```json") {
+                    clean_text
+                        .strip_prefix("```json")
+                        .unwrap_or(clean_text)
+                        .strip_suffix("```")
+                        .unwrap_or(clean_text)
+                        .trim()
+                } else if clean_text.starts_with("```") {
+                    clean_text
+                        .strip_prefix("```")
+                        .unwrap_or(clean_text)
+                        .strip_suffix("```")
+                        .unwrap_or(clean_text)
+                        .trim()
+                } else {
+                    clean_text
+                };
+
+                let json_val: Value = serde_json::from_str(clean_text).map_err(|e| {
+                    anyhow!(
+                        "Failed to parse JSON response: {}. Text: {}",
+                        e,
+                        final_text
+                    )
+                })?;
+                return Ok(json_val);
             }
         }
     }

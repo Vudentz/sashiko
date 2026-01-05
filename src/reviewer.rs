@@ -198,6 +198,7 @@ impl Reviewer {
                                             None,
                                             None,
                                             &msg,
+                                            None,
                                         )
                                         .await
                                     {
@@ -287,6 +288,7 @@ impl Reviewer {
                             prompts_hash.as_deref(),
                             baseline_id,
                             &description,
+                            None,
                         )
                         .await
                     {

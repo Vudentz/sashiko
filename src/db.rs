@@ -259,10 +259,11 @@ impl Database {
         prompts_hash: Option<&str>,
         baseline_id: Option<i64>,
         result_description: &str,
+        interaction_id: Option<&str>,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, result_description, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, result_description, interaction_id, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             libsql::params![
                 patchset_id,
                 provider,
@@ -270,6 +271,38 @@ impl Database {
                 prompts_hash,
                 baseline_id,
                 result_description,
+                interaction_id,
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    pub async fn create_ai_interaction(
+        &self,
+        id: &str,
+        parent_id: Option<&str>,
+        workflow_id: Option<&str>,
+        provider: &str,
+        model: &str,
+        input: &str,
+        output: &str,
+        tokens_in: u32,
+        tokens_out: u32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ai_interactions (id, parent_interaction_id, workflow_id, provider, model, input_context, output_raw, tokens_in, tokens_out, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            libsql::params![
+                id,
+                parent_id,
+                workflow_id,
+                provider,
+                model,
+                input,
+                output,
+                tokens_in,
+                tokens_out,
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64
             ],
         ).await?;
