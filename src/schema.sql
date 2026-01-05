@@ -82,6 +82,8 @@ CREATE TABLE IF NOT EXISTS reviews (
     created_at INTEGER,
     interaction_id TEXT,
     baseline_id INTEGER,
+    status TEXT DEFAULT 'Pending', -- Pending, Applying, Analyzing, Completed, Failed
+    logs TEXT,
     FOREIGN KEY(patchset_id) REFERENCES patchsets(id),
     FOREIGN KEY(interaction_id) REFERENCES ai_interactions(id),
     FOREIGN KEY(baseline_id) REFERENCES baselines(id)

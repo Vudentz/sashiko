@@ -268,15 +268,94 @@ impl Database {
         let _ = self
             .try_add_column("reviews", "result_description", "TEXT")
             .await;
+        let _ = self.try_add_column("reviews", "status", "TEXT").await;
+        let _ = self.try_add_column("reviews", "logs", "TEXT").await;
 
         info!("Database schema applied");
         Ok(())
     }
 
+    pub async fn create_review(
+        &self,
+        patchset_id: i64,
+        provider: &str,
+        model: &str,
+        baseline_id: Option<i64>,
+        prompts_hash: Option<&str>,
+    ) -> Result<i64> {
+        self.conn
+            .execute(
+                "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, status, created_at)
+             VALUES (?, ?, ?, ?, ?, 'Pending', ?)",
+                libsql::params![
+                    patchset_id,
+                    provider,
+                    model,
+                    prompts_hash,
+                    baseline_id,
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)?
+                        .as_secs() as i64
+                ],
+            )
+            .await?;
+
+        let mut rows = self
+            .conn
+            .query("SELECT last_insert_rowid()", libsql::params![])
+            .await?;
+        if let Ok(Some(row)) = rows.next().await {
+            Ok(row.get(0)?)
+        } else {
+            Err(anyhow::anyhow!("Failed to get review ID"))
+        }
+    }
+
+    pub async fn update_review_status(
+        &self,
+        review_id: i64,
+        status: &str,
+        logs: Option<&str>,
+    ) -> Result<()> {
+        if let Some(l) = logs {
+            self.conn
+                .execute(
+                    "UPDATE reviews SET status = ?, logs = ? WHERE id = ?",
+                    libsql::params![status, l, review_id],
+                )
+                .await?;
+        } else {
+            self.conn
+                .execute(
+                    "UPDATE reviews SET status = ? WHERE id = ?",
+                    libsql::params![status, review_id],
+                )
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn complete_review(
+        &self,
+        review_id: i64,
+        status: &str,
+        result: &str,
+        summary: Option<&str>,
+        interaction_id: Option<&str>,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "UPDATE reviews SET status = ?, result_description = ?, summary = ?, interaction_id = ? WHERE id = ?",
+                libsql::params![status, result, summary, interaction_id, review_id],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub async fn create_review_experiment(&self, params: ReviewExperimentParams<'_>) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, result_description, interaction_id, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, result_description, interaction_id, created_at, status)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Finished')",
             libsql::params![
                 params.patchset_id,
                 params.provider,
@@ -1239,7 +1318,8 @@ impl Database {
                 .query(
                     "SELECT r.model_name, r.summary, r.created_at, ai.input_context, ai.output_raw, 
                             b.repo_url, b.branch, b.last_known_commit,
-                            r.provider, r.prompts_git_hash, r.result_description
+                            r.provider, r.prompts_git_hash, r.result_description,
+                            r.status, r.logs, ai.tokens_in, ai.tokens_out
                  FROM reviews r
                  LEFT JOIN ai_interactions ai ON r.interaction_id = ai.id
                  LEFT JOIN baselines b ON r.baseline_id = b.id
@@ -1264,6 +1344,10 @@ impl Database {
                     "provider": r.get::<Option<String>>(8).ok(),
                     "prompts_hash": r.get::<Option<String>>(9).ok(),
                     "result": r.get::<Option<String>>(10).ok(),
+                    "status": r.get::<Option<String>>(11).ok(),
+                    "logs": r.get::<Option<String>>(12).ok(),
+                    "tokens_in": r.get::<Option<u32>>(13).ok(),
+                    "tokens_out": r.get::<Option<u32>>(14).ok(),
                 }));
             }
 

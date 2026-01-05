@@ -1,5 +1,5 @@
 use crate::baseline::{BaselineRegistry, BaselineResolution, extract_files_from_diff};
-use crate::db::{Database, ReviewExperimentParams};
+use crate::db::{AiInteractionParams, Database};
 use crate::git_ops::{ensure_remote, get_commit_hash};
 use crate::settings::Settings;
 use anyhow::Result;
@@ -11,6 +11,19 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
+
+fn generate_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    format!(
+        "{:x}-{:x}",
+        since_the_epoch.as_micros(),
+        std::process::id()
+    )
+}
 
 pub struct Reviewer {
     db: Arc<Database>,
@@ -189,21 +202,6 @@ impl Reviewer {
                                         url, e
                                     );
                                     error!("{}", msg);
-                                    // Record skipped experiment
-                                    if let Err(e) = db
-                                        .create_review_experiment(ReviewExperimentParams {
-                                            patchset_id,
-                                            provider: &settings.ai.provider,
-                                            model: &settings.ai.model,
-                                            prompts_hash: None,
-                                            baseline_id: None,
-                                            result_description: &msg,
-                                            interaction_id: None,
-                                        })
-                                        .await
-                                    {
-                                        error!("Failed to record fetch failure: {}", e);
-                                    }
                                     continue;
                                 }
                             }
@@ -228,7 +226,27 @@ impl Reviewer {
                         None
                     };
 
-                    let (mut status, mut description) = match run_review_tool(
+                    let review_id = match db.create_review(
+                        patchset_id,
+                        &settings.ai.provider,
+                        &settings.ai.model,
+                        baseline_id,
+                        prompts_hash.as_deref(),
+                    ).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            error!("Failed to create review entry: {}", e);
+                            continue;
+                        }
+                    };
+
+                     if let Some(warning) = fetch_warning {
+                        let _ = db.update_review_status(review_id, "Applying Patches", Some(&warning)).await;
+                    } else {
+                        let _ = db.update_review_status(review_id, "Applying Patches", None).await;
+                    }
+
+                    match run_review_tool(
                         patchset_id,
                         &input_payload,
                         &settings,
@@ -237,26 +255,78 @@ impl Reviewer {
                     )
                     .await
                     {
-                        Ok(r) => r,
+                        Ok(json_output) => {
+                            // Check patches
+                            let all_applied = json_output["patches"]
+                                .as_array()
+                                .map(|arr| arr.iter().all(|p| p["status"] == "applied"))
+                                .unwrap_or(false);
+
+                            if all_applied {
+                                if let Some(review_content) = json_output.get("review") {
+                                    if !review_content.is_null() {
+                                        // Record Interaction
+                                        let interaction_id = generate_id();
+                                        let input_ctx = json_output["input_context"].as_str().unwrap_or("");
+                                        let output_raw = review_content.to_string(); // Serialize the whole review JSON
+                                        
+                                        let _ = db.create_ai_interaction(AiInteractionParams {
+                                            id: &interaction_id,
+                                            parent_id: None,
+                                            workflow_id: None,
+                                            provider: &settings.ai.provider,
+                                            model: &settings.ai.model,
+                                            input: input_ctx,
+                                            output: &output_raw,
+                                            tokens_in: json_output["tokens_in"].as_u64().unwrap_or(0) as u32,
+                                            tokens_out: json_output["tokens_out"].as_u64().unwrap_or(0) as u32,
+                                        }).await;
+
+                                        let summary = review_content["summary"].as_str().unwrap_or("No summary available.").to_string();
+                                        let result_desc = "Review completed successfully.";
+
+                                        let _ = db.complete_review(review_id, "Finished", result_desc, Some(&summary), Some(&interaction_id)).await;
+                                        final_status = "Applied".to_string(); // Patchset status
+                                        break; // Success!
+                                    } else {
+                                         let _ = db.complete_review(review_id, "Failed", "AI returned null response", None, None).await;
+                                    }
+                                } else {
+                                     let _ = db.complete_review(review_id, "Failed", "Patches applied but AI review missing from output", None, None).await;
+                                }
+                            } else {
+                                // Patches failed
+                                let patches_debug = serde_json::to_string_pretty(&json_output["patches"]).unwrap_or_default();
+                                let error_msg = json_output["error"].as_str().unwrap_or("Patch application failed");
+                                let _ = db.update_review_status(review_id, "Failed", Some(&patches_debug)).await;
+                                let _ = db.complete_review(review_id, "Failed", error_msg, None, None).await;
+                            }
+                        }
                         Err(e) => {
                             error!("Review execution failed for {}: {}", patchset_id, e);
-                            ("Failed".to_string(), format!("Execution error: {}", e))
+                            let _ = db.complete_review(review_id, "Failed", &format!("Tool error: {}", e), None, None).await;
                         }
-                    };
-
-                    if let Some(warning) = fetch_warning {
-                        description = format!("{} [Warning: {}]", description, warning);
                     }
 
                     // Retry logic (only for RemoteTarget failure)
-                    if status == "Failed" {
+                    if final_status == "Failed" {
                         if let Some((url, name)) = remote_info {
-                            info!(
-                                "Patchset {} failed with remote baseline. Forcing fetch and retrying...",
-                                patchset_id
-                            );
+                            info!("Patchset {} failed with remote baseline. Forcing fetch and retrying...", patchset_id);
                             if ensure_remote(&repo_path, &name, &url, true).await.is_ok() {
-                                match run_review_tool(
+                                let retry_review_id = match db.create_review(
+                                    patchset_id,
+                                    &settings.ai.provider,
+                                    &settings.ai.model,
+                                    baseline_id,
+                                    prompts_hash.as_deref(),
+                                ).await {
+                                    Ok(id) => id,
+                                    Err(_) => continue,
+                                };
+                                let _ = db.update_review_status(retry_review_id, "Applying Patches (Retry)", None).await;
+
+                                // Run tool again
+                                 match run_review_tool(
                                     patchset_id,
                                     &input_payload,
                                     &settings,
@@ -265,42 +335,51 @@ impl Reviewer {
                                 )
                                 .await
                                 {
-                                    Ok((s, d)) => {
-                                        info!("Retry result for {}: {}", patchset_id, s);
-                                        status = s;
-                                        description = d;
+                                    Ok(json_output) => {
+                                        // Same logic...
+                                         let all_applied = json_output["patches"]
+                                            .as_array()
+                                            .map(|arr| arr.iter().all(|p| p["status"] == "applied"))
+                                            .unwrap_or(false);
+                                        
+                                        if all_applied {
+                                            if let Some(review_content) = json_output.get("review") {
+                                                if !review_content.is_null() {
+                                                    let interaction_id = generate_id();
+                                                    let input_ctx = json_output["input_context"].as_str().unwrap_or("");
+                                                    let output_raw = review_content.to_string();
+                                                    
+                                                    let _ = db.create_ai_interaction(AiInteractionParams {
+                                                        id: &interaction_id,
+                                                        parent_id: None,
+                                                        workflow_id: None,
+                                                        provider: &settings.ai.provider,
+                                                        model: &settings.ai.model,
+                                                        input: input_ctx,
+                                                        output: &output_raw,
+                                                        tokens_in: json_output["tokens_in"].as_u64().unwrap_or(0) as u32,
+                                                        tokens_out: json_output["tokens_out"].as_u64().unwrap_or(0) as u32,
+                                                    }).await;
+
+                                                    let summary = review_content["summary"].as_str().unwrap_or("No summary available.").to_string();
+                                                    let result_desc = "Review completed successfully (Retry).";
+                                                    let _ = db.complete_review(retry_review_id, "Finished", result_desc, Some(&summary), Some(&interaction_id)).await;
+                                                    final_status = "Applied".to_string();
+                                                    break;
+                                                }
+                                            }
+                                        } else {
+                                            let logs = serde_json::to_string_pretty(&json_output["patches"]).unwrap_or_default();
+                                            let _ = db.update_review_status(retry_review_id, "Failed", Some(&logs)).await;
+                                            let _ = db.complete_review(retry_review_id, "Failed", "Retry failed", None, None).await;
+                                        }
                                     }
                                     Err(e) => {
-                                        description =
-                                            format!("{} [Retry error: {}]", description, e);
+                                         let _ = db.complete_review(retry_review_id, "Failed", &format!("Tool error: {}", e), None, None).await;
                                     }
                                 }
                             }
                         }
-                    }
-
-                    // Record Experiment
-                    if let Err(e) = db
-                        .create_review_experiment(ReviewExperimentParams {
-                            patchset_id,
-                            provider: &settings.ai.provider,
-                            model: &settings.ai.model,
-                            prompts_hash: prompts_hash.as_deref(),
-                            baseline_id,
-                            result_description: &description,
-                            interaction_id: None,
-                        })
-                        .await
-                    {
-                        error!(
-                            "Failed to record review experiment for {}: {}",
-                            patchset_id, e
-                        );
-                    }
-
-                    if status == "Applied" {
-                        final_status = "Applied".to_string();
-                        break; // Stop trying candidates
                     }
                 }
 
@@ -324,7 +403,7 @@ async fn run_review_tool(
     settings: &Settings,
     db: Arc<Database>,
     baseline: &str,
-) -> Result<(String, String)> {
+) -> Result<serde_json::Value> {
     let exe_path = std::env::current_exe()?;
     let bin_dir = exe_path
         .parent()
@@ -371,54 +450,31 @@ async fn run_review_tool(
             output.status.code(),
             stderr
         );
-        return Ok(("Failed".to_string(), format!("Tool failure: {}", stderr)));
+        return Err(anyhow::anyhow!("Tool failure: {}", stderr));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     let json: serde_json::Value = serde_json::from_str(&stdout)?;
-    let patches = json["patches"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Invalid output JSON: no patches"))?;
+    
+    // Update DB with patch statuses
+    if let Some(patches) = json["patches"].as_array() {
+        for p in patches {
+            let idx = p["index"].as_i64().unwrap_or(0);
+            let status = p["status"].as_str().unwrap_or("error");
+            let stderr = p["stderr"].as_str();
 
-    // Update DB
-    for p in patches {
-        let idx = p["index"].as_i64().unwrap_or(0);
-        let status = p["status"].as_str().unwrap_or("error");
-        let stderr = p["stderr"].as_str();
-
-        if let Err(e) = db
-            .update_patch_application_status(patchset_id, idx, status, stderr)
-            .await
-        {
-            error!(
-                "Failed to update patch status for ps={} idx={}: {}",
-                patchset_id, idx, e
-            );
+            if let Err(e) = db
+                .update_patch_application_status(patchset_id, idx, status, stderr)
+                .await
+            {
+                error!(
+                    "Failed to update patch status for ps={} idx={}: {}",
+                    patchset_id, idx, e
+                );
+            }
         }
     }
 
-    let all_applied = patches.iter().all(|p| p["status"] == "applied");
-
-    if all_applied {
-        Ok((
-            "Applied".to_string(),
-            "All patches applied successfully.".to_string(),
-        ))
-    } else {
-        let mut errors = Vec::new();
-        for p in patches.iter().filter(|p| p["status"] == "failed").take(3) {
-            let msg = format!(
-                "Patch {} failed: {}",
-                p["index"],
-                p["stderr"].as_str().unwrap_or("")
-            );
-            warn!("{}", msg);
-            errors.push(msg);
-        }
-        if errors.is_empty() {
-            errors.push("Unknown patch failure".to_string());
-        }
-        Ok(("Failed".to_string(), errors.join("; ")))
-    }
+    Ok(json)
 }

@@ -161,8 +161,6 @@ async fn main() -> Result<()> {
         }
     }
 
-    let mut review_content = None;
-
     if all_applied {
         info!("All patches applied. Starting AI review...");
         let model_name = args.model.unwrap_or_else(|| settings.ai.model.clone());
@@ -178,26 +176,42 @@ async fn main() -> Result<()> {
         });
 
         match agent.run(patchset_val).await {
-            Ok(review) => {
+            Ok(result) => {
                 info!("AI review completed.");
-                review_content = Some(review);
+                
+                let result_json = json!({
+                    "patchset_id": patchset_id,
+                    "baseline": baseline,
+                    "patches": patch_results,
+                    "review": result.output,
+                    "input_context": result.input_context,
+                    "tokens_in": result.tokens_in,
+                    "tokens_out": result.tokens_out
+                });
+                println!("{}", serde_json::to_string_pretty(&result_json)?);
             }
             Err(e) => {
                 error!("AI review failed: {}", e);
+                // Even on failure, we print what we have (patches status)
+                 let result_json = json!({
+                    "patchset_id": patchset_id,
+                    "baseline": baseline,
+                    "patches": patch_results,
+                    "error": e.to_string()
+                });
+                println!("{}", serde_json::to_string_pretty(&result_json)?);
             }
         }
     } else {
         info!("Not all patches applied successfully. Skipping AI review.");
+         let result_json = json!({
+            "patchset_id": patchset_id,
+            "baseline": baseline,
+            "patches": patch_results,
+            "error": "Patch application failed"
+        });
+        println!("{}", serde_json::to_string_pretty(&result_json)?);
     }
-
-    let result = json!({
-        "patchset_id": patchset_id,
-        "baseline": baseline,
-        "patches": patch_results,
-        "review": review_content
-    });
-
-    println!("{}", serde_json::to_string_pretty(&result)?);
 
     worktree.remove().await?;
 

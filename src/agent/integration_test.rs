@@ -48,7 +48,8 @@ mod tests {
         let result = agent.run(patchset).await;
 
         match result {
-            Ok(review) => {
+            Ok(agent_res) => {
+                let review = agent_res.output;
                 let is_empty = match &review {
                     serde_json::Value::Null => true,
                     serde_json::Value::String(s) => s.is_empty(),
