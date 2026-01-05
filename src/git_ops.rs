@@ -281,7 +281,7 @@ pub async fn ensure_remote(
         .map(|s| s.success())
         .unwrap_or(false);
 
-    let should_fetch = if just_added {
+    let should_fetch = if just_added || !head_exists {
         true
     } else {
         match age {
@@ -296,7 +296,7 @@ pub async fn ensure_remote(
         }
     };
 
-    if !should_fetch && head_exists {
+    if !should_fetch {
         let reason = if force_fetch {
             "forced but recently fetched"
         } else {
@@ -307,24 +307,7 @@ pub async fn ensure_remote(
     }
 
     // 4. Fetch
-    if should_fetch {
-        info!("Fetching remote {}", name);
-        let fetch = Command::new("git")
-            .current_dir(repo_path)
-            .args(["fetch", name])
-            .output()
-            .await?;
-
-        if !fetch.status.success() {
-            return Err(anyhow!(
-                "Failed to fetch remote {}: {}",
-                name,
-                String::from_utf8_lossy(&fetch.stderr)
-            ));
-        }
-        // Update timestamp
-        let _ = std::fs::File::create(&timestamp_file); // Touch file
-    }
+    info!("Fetching remote {}", name);
 
     // Ensure HEAD is set correctly (if we fetched OR if it was missing)
     if should_fetch || !head_exists {
