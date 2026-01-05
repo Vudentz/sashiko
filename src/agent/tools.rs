@@ -232,10 +232,14 @@ impl ToolBox {
             .await?;
 
         if !output.status.success() {
-            return Err(anyhow!(
-                "git diff failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            ));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let mut error_msg = format!("git diff failed: {}", stderr);
+
+            if stderr.contains("unknown revision") || stderr.contains("ambiguous argument") {
+                error_msg.push_str("\nHint: The repository might be a shallow clone (depth=1). You cannot access history beyond HEAD. Try using 'HEAD' or diffing against specific files without revision ranges.");
+            }
+
+            return Err(anyhow!(error_msg));
         }
 
         let content = String::from_utf8_lossy(&output.stdout).to_string();

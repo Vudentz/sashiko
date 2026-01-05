@@ -384,14 +384,19 @@ impl Reviewer {
                                                 }
                                             }
                                         } else {
-                                            // Patches applied but no review (maybe list empty logic in review.rs?)
+                                            // Patches applied but no review content found
+                                            let error_msg = json_output["error"]
+                                                .as_str()
+                                                .unwrap_or("Missing review content");
+
+                                            error!(
+                                                "Review tool returned no content for ps={} idx={}. Error: {}",
+                                                patchset_id, index, error_msg
+                                            );
+
                                             let _ = db
                                                 .complete_review(
-                                                    review_id,
-                                                    "Failed",
-                                                    "Missing review content",
-                                                    None,
-                                                    None,
+                                                    review_id, "Failed", error_msg, None, None,
                                                     None,
                                                 )
                                                 .await;

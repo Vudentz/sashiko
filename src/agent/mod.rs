@@ -68,9 +68,7 @@ impl Agent {
                 Part::Text { text, .. } => {
                     count += text.split_whitespace().count();
                 }
-                Part::FunctionCall {
-                    function_call, ..
-                } => {
+                Part::FunctionCall { function_call, .. } => {
                     count += function_call.name.split_whitespace().count();
                     count += function_call.args.to_string().split_whitespace().count();
                 }
