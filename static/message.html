@@ -21,7 +21,7 @@
 </head>
 <body>
     <div class="nav">
-        <a href="/">← Back to List</a>
+        <a id="nav-back" href="/">← Back to List</a>
     </div>
 
     <div class="container" id="loading">Loading...</div>
@@ -47,6 +47,33 @@
     </div>
 
     <script>
+        // Handle Back Navigation
+        const navBack = document.getElementById('nav-back');
+        if (document.referrer) {
+            try {
+                const refUrl = new URL(document.referrer);
+                if (refUrl.origin === window.location.origin) {
+                    navBack.href = document.referrer; // Set fallback link
+                    
+                    if (refUrl.pathname.includes('details.html')) {
+                        navBack.innerText = '← Back to Patchset';
+                    } else {
+                        navBack.innerText = '← Back';
+                    }
+
+                    // Attempt to use history.back() for better UX (scroll restoration)
+                    navBack.addEventListener('click', (e) => {
+                         if (window.history.length > 1) {
+                            e.preventDefault();
+                            window.history.back();
+                        }
+                    });
+                }
+            } catch (e) {
+                // Ignore parsing errors
+            }
+        }
+
         const params = new URLSearchParams(window.location.search);
         const id = params.get('id');
 
