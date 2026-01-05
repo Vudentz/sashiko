@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS patches (
 CREATE TABLE IF NOT EXISTS reviews (
     id INTEGER PRIMARY KEY,
     patchset_id INTEGER NOT NULL,
+    patch_id INTEGER, -- Optional link to specific patch
     model_name TEXT,
     provider TEXT,
     prompts_git_hash TEXT,
@@ -85,6 +86,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     status TEXT DEFAULT 'Pending', -- Pending, Applying, Analyzing, Completed, Failed
     logs TEXT,
     FOREIGN KEY(patchset_id) REFERENCES patchsets(id),
+    FOREIGN KEY(patch_id) REFERENCES patches(id),
     FOREIGN KEY(interaction_id) REFERENCES ai_interactions(id),
     FOREIGN KEY(baseline_id) REFERENCES baselines(id)
 );

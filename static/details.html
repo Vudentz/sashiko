@@ -86,14 +86,43 @@
         function render(data) {
             const date = new Date(data.date * 1000).toLocaleString();
             
+            // Map patch_id to patch details
+            const patchMap = new Map();
+            if (data.patches) {
+                data.patches.forEach(p => patchMap.set(p.id, p));
+            }
+
+            // Group reviews by patch_id
+            const reviewsByPatch = new Map();
+            // Initialize with all patches so we show sections even if no review yet (optional, but good for structure)
+            if (data.patches) {
+                data.patches.forEach(p => {
+                    reviewsByPatch.set(p.id, []);
+                });
+            }
+            reviewsByPatch.set(null, []); // For general/whole-set reviews
+
+            if (data.reviews) {
+                data.reviews.forEach(r => {
+                    const pid = r.patch_id || null;
+                    if (!reviewsByPatch.has(pid)) {
+                        reviewsByPatch.set(pid, []);
+                    }
+                    reviewsByPatch.get(pid).push(r);
+                });
+            }
+
             let reviewsHtml = '';
-            if (data.reviews && data.reviews.length > 0) {
-                reviewsHtml = data.reviews.map((r, index) => {
+            
+            // Helper to render a list of reviews
+            const renderReviewList = (reviews) => {
+                if (!reviews || reviews.length === 0) return '<p class="text-muted" style="font-style:italic;">No reviews yet.</p>';
+                return reviews.map((r, index) => {
                     const rDate = r.created_at ? new Date(r.created_at * 1000).toLocaleString() : '-';
                     const providerModel = `${r.provider || '?'}/${r.model || '?'}`;
                     const prompts = r.prompts_hash ? r.prompts_hash.substring(0, 8) : '-';
-                    const status = r.status || 'Finished'; // Default for old records
-                    const statusClass = `status-${status.split(' ')[0]}`; // Handle "Applying Patches" -> "Applying"
+                    const status = r.status || 'Finished';
+                    const statusClass = `status-${status.split(' ')[0]}`;
                     
                     let baselineStr = '-';
                     if (r.baseline) {
@@ -108,7 +137,8 @@
                     const tokensOut = r.tokens_out || 0;
                     const totalTokens = tokensIn + tokensOut;
 
-                    const detailsId = `review-details-${index}`;
+                    const uniqueId = Math.random().toString(36).substr(2, 9);
+                    const detailsId = `review-details-${uniqueId}`;
                     
                     let logsSection = '';
                     if (r.logs) {
@@ -124,8 +154,8 @@
                     if (r.input) {
                         inputSection = `
                             <div style="margin-top: 10px;">
-                                <button class="toggle-btn" onclick="toggleDetails('input-${index}')">Show Input Context</button>
-                                <div id="input-${index}" class="review-details">
+                                <button class="toggle-btn" onclick="toggleDetails('input-${uniqueId}')">Show Input Context</button>
+                                <div id="input-${uniqueId}" class="review-details">
                                     <div class="log-block" style="background:#eee; color:#333;">${escapeHtml(r.input)}</div>
                                 </div>
                             </div>
@@ -136,8 +166,8 @@
                      if (r.output) {
                         outputSection = `
                             <div style="margin-top: 10px;">
-                                <button class="toggle-btn" onclick="toggleDetails('output-${index}')">Show Raw Output</button>
-                                <div id="output-${index}" class="review-details">
+                                <button class="toggle-btn" onclick="toggleDetails('output-${uniqueId}')">Show Raw Output</button>
+                                <div id="output-${uniqueId}" class="review-details">
                                     <div class="log-block" style="background:#eee; color:#333;">${escapeHtml(r.output)}</div>
                                 </div>
                             </div>
@@ -147,7 +177,7 @@
                     return `
                         <div class="review-card">
                             <div class="review-header">
-                                <div class="review-title">Review #${data.reviews.length - index}</div>
+                                <div class="review-title">Review</div>
                                 <div class="review-status ${statusClass}">${status}</div>
                             </div>
                             
@@ -155,14 +185,13 @@
                                 <div class="review-meta-label">Date:</div><div>${rDate}</div>
                                 <div class="review-meta-label">Model:</div><div>${providerModel}</div>
                                 <div class="review-meta-label">Baseline:</div><div>${baselineStr}</div>
-                                <div class="review-meta-label">Prompts:</div><div>${prompts}</div>
                                 <div class="review-meta-label">Result:</div><div>${r.result || '-'}</div>
                             </div>
 
                             ${r.summary ? `<div class="review-summary">${escapeHtml(r.summary)}</div>` : ''}
                             
                             <div class="token-stats">
-                                Tokens: ${tokensIn.toLocaleString()} in + ${tokensOut.toLocaleString()} out = ${totalTokens.toLocaleString()} total
+                                <strong>Token Usage:</strong> ${tokensIn.toLocaleString()} in + ${tokensOut.toLocaleString()} out = ${totalTokens.toLocaleString()} total
                             </div>
 
                             <div style="margin-top: 10px;">
@@ -177,7 +206,45 @@
                         </div>
                     `;
                 }).join('');
-            } else {
+            };
+
+            // 1. General/Whole Set Reviews (patch_id is null)
+            const generalReviews = reviewsByPatch.get(null) || [];
+            if (generalReviews.length > 0) {
+                 reviewsHtml += `<h3>General / Whole Set Reviews</h3>${renderReviewList(generalReviews)}`;
+            }
+
+            // 2. Per-Patch Reviews
+            // Sort by part_index
+            const sortedPatchIds = Array.from(reviewsByPatch.keys())
+                .filter(id => id !== null)
+                .sort((a, b) => {
+                    const pa = patchMap.get(a);
+                    const pb = patchMap.get(b);
+                    return (pa ? pa.part_index : 0) - (pb ? pb.part_index : 0);
+                });
+
+            sortedPatchIds.forEach(pid => {
+                const patch = patchMap.get(pid);
+                const reviews = reviewsByPatch.get(pid);
+                const patchLabel = patch ? `Patch ${patch.part_index}: ${patch.subject || '(no subject)'}` : `Patch ID ${pid}`;
+                
+                // Calculate total tokens for this patch
+                let totalTokensPatch = 0;
+                reviews.forEach(r => totalTokensPatch += (r.tokens_in || 0) + (r.tokens_out || 0));
+
+                reviewsHtml += `
+                    <div style="margin-top: 20px; border-top: 2px solid #eee; padding-top: 10px;">
+                        <h3 style="display:flex; justify-content:space-between;">
+                            <span>${escapeHtml(patchLabel)}</span>
+                            <span style="font-size:0.8em; font-weight:normal; color:#666;">Total Tokens: ${totalTokensPatch.toLocaleString()}</span>
+                        </h3>
+                        ${renderReviewList(reviews)}
+                    </div>
+                `;
+            });
+
+            if (!reviewsHtml) {
                 reviewsHtml = '<p>No AI reviews yet.</p>';
             }
 

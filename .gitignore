@@ -7,3 +7,4 @@ Cargo.lock
 *.db-shm
 archives/
 .cargo/config.toml
+sashiko.log

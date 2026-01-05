@@ -40,9 +40,14 @@ struct Args {
 
     #[arg(long)]
     model: Option<String>,
+
+    /// If set, only review the patch with this index (1-based usually).
+    /// Previous patches (with lower index) will be applied but not reviewed.
+    #[arg(long)]
+    review_patch_index: Option<i64>,
 }
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct PatchInput {
     index: i64,
     diff: String,
@@ -107,7 +112,7 @@ async fn main() -> Result<()> {
         let db_diffs = db.get_patch_diffs(pid).await?;
         let patches = db_diffs
             .into_iter()
-            .map(|(idx, diff)| PatchInput { index: idx, diff })
+            .map(|(_id, idx, diff)| PatchInput { index: idx, diff })
             .collect();
 
         (pid, subj, patches)
@@ -121,12 +126,21 @@ async fn main() -> Result<()> {
     let worktree = GitWorktree::new(&repo_path, &baseline, args.worktree_dir.as_deref()).await?;
 
     info!("Created worktree at {:?}", worktree.path);
-    info!("Found {} patches to apply", patches.len());
+    info!("Found {} patches total", patches.len());
 
     let mut patch_results = Vec::new();
     let mut all_applied = true;
 
-    for p in &patches {
+    // Filter patches to apply: all patches with index <= review_patch_index (if set), or all patches
+    let patches_to_apply: Vec<&PatchInput> = if let Some(target_idx) = args.review_patch_index {
+        patches.iter().filter(|p| p.index <= target_idx).collect()
+    } else {
+        patches.iter().collect()
+    };
+
+    info!("Applying {} patches...", patches_to_apply.len());
+
+    for p in &patches_to_apply {
         info!("Applying patch part {}", p.index);
         match worktree.apply_raw_diff(&p.diff).await {
             Ok(output) => {
@@ -163,45 +177,67 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Determine patches to review
+    let patches_to_review: Vec<PatchInput> = if let Some(target_idx) = args.review_patch_index {
+        patches.iter().filter(|p| p.index == target_idx).cloned().collect()
+    } else {
+        patches.clone() // Review all
+    };
+
     if all_applied {
-        info!("All patches applied. Starting AI review...");
-        let model_name = args.model.unwrap_or_else(|| settings.ai.model.clone());
-        let client = GeminiClient::new(model_name);
-        let tools = ToolBox::new(worktree.path.clone(), args.prompts.clone());
-        let prompts = PromptRegistry::new(args.prompts.clone());
-        let mut agent = Agent::new(client, tools, prompts);
+        if patches_to_review.is_empty() {
+             info!("No patches matched review index or list empty. Skipping AI review.");
+             // Return success with patches status (even if we didn't review anything)
+              let result_json = json!({
+                "patchset_id": patchset_id,
+                "baseline": baseline,
+                "patches": patch_results,
+                "review": null, // Indicate no review
+                "input_context": "",
+                "tokens_in": 0,
+                "tokens_out": 0
+            });
+            println!("{}", serde_json::to_string_pretty(&result_json)?);
+        } else {
+            info!("Patches applied. Starting AI review for {} patches...", patches_to_review.len());
+            let model_name = args.model.unwrap_or_else(|| settings.ai.model.clone());
+            let client = GeminiClient::new(model_name);
+            let tools = ToolBox::new(worktree.path.clone(), args.prompts.clone());
+            let prompts = PromptRegistry::new(args.prompts.clone());
+            let mut agent = Agent::new(client, tools, prompts);
 
-        let patchset_val = json!({
-            "id": patchset_id,
-            "subject": subject,
-            "patches": patches
-        });
+            let patchset_val = json!({
+                "id": patchset_id,
+                "subject": subject,
+                "patches": patches_to_review
+            });
 
-        match agent.run(patchset_val).await {
-            Ok(result) => {
-                info!("AI review completed.");
+            match agent.run(patchset_val).await {
+                Ok(result) => {
+                    info!("AI review completed.");
 
-                let result_json = json!({
-                    "patchset_id": patchset_id,
-                    "baseline": baseline,
-                    "patches": patch_results,
-                    "review": result.output,
-                    "input_context": result.input_context,
-                    "tokens_in": result.tokens_in,
-                    "tokens_out": result.tokens_out
-                });
-                println!("{}", serde_json::to_string_pretty(&result_json)?);
-            }
-            Err(e) => {
-                error!("AI review failed: {}", e);
-                // Even on failure, we print what we have (patches status)
-                let result_json = json!({
-                    "patchset_id": patchset_id,
-                    "baseline": baseline,
-                    "patches": patch_results,
-                    "error": e.to_string()
-                });
-                println!("{}", serde_json::to_string_pretty(&result_json)?);
+                    let result_json = json!({
+                        "patchset_id": patchset_id,
+                        "baseline": baseline,
+                        "patches": patch_results,
+                        "review": result.output,
+                        "input_context": result.input_context,
+                        "tokens_in": result.tokens_in,
+                        "tokens_out": result.tokens_out
+                    });
+                    println!("{}", serde_json::to_string_pretty(&result_json)?);
+                }
+                Err(e) => {
+                    error!("AI review failed: {}", e);
+                    // Even on failure, we print what we have (patches status)
+                    let result_json = json!({
+                        "patchset_id": patchset_id,
+                        "baseline": baseline,
+                        "patches": patch_results,
+                        "error": e.to_string()
+                    });
+                    println!("{}", serde_json::to_string_pretty(&result_json)?);
+                }
             }
         }
     } else {

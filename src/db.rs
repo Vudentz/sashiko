@@ -270,6 +270,7 @@ impl Database {
             .await;
         let _ = self.try_add_column("reviews", "status", "TEXT").await;
         let _ = self.try_add_column("reviews", "logs", "TEXT").await;
+        let _ = self.try_add_column("reviews", "patch_id", "INTEGER").await;
 
         info!("Database schema applied");
         Ok(())
@@ -278,6 +279,7 @@ impl Database {
     pub async fn create_review(
         &self,
         patchset_id: i64,
+        patch_id: Option<i64>,
         provider: &str,
         model: &str,
         baseline_id: Option<i64>,
@@ -285,10 +287,11 @@ impl Database {
     ) -> Result<i64> {
         self.conn
             .execute(
-                "INSERT INTO reviews (patchset_id, provider, model_name, prompts_git_hash, baseline_id, status, created_at)
-             VALUES (?, ?, ?, ?, ?, 'Pending', ?)",
+                "INSERT INTO reviews (patchset_id, patch_id, provider, model_name, prompts_git_hash, baseline_id, status, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, 'Pending', ?)",
                 libsql::params![
                     patchset_id,
+                    patch_id,
                     provider,
                     model,
                     prompts_hash,
@@ -1319,7 +1322,7 @@ impl Database {
                     "SELECT r.model_name, r.summary, r.created_at, ai.input_context, ai.output_raw, 
                             b.repo_url, b.branch, b.last_known_commit,
                             r.provider, r.prompts_git_hash, r.result_description,
-                            r.status, r.logs, ai.tokens_in, ai.tokens_out
+                            r.status, r.logs, ai.tokens_in, ai.tokens_out, r.patch_id
                  FROM reviews r
                  LEFT JOIN ai_interactions ai ON r.interaction_id = ai.id
                  LEFT JOIN baselines b ON r.baseline_id = b.id
@@ -1348,6 +1351,7 @@ impl Database {
                     "logs": r.get::<Option<String>>(12).ok(),
                     "tokens_in": r.get::<Option<u32>>(13).ok(),
                     "tokens_out": r.get::<Option<u32>>(14).ok(),
+                    "patch_id": r.get::<Option<i64>>(15).ok(),
                 }));
             }
 
@@ -1429,17 +1433,18 @@ impl Database {
         }
     }
 
-    pub async fn get_patch_diffs(&self, patchset_id: i64) -> Result<Vec<(i64, String)>> {
+    pub async fn get_patch_diffs(&self, patchset_id: i64) -> Result<Vec<(i64, i64, String)>> {
         let mut rows = self.conn.query(
-            "SELECT part_index, diff FROM patches WHERE patchset_id = ? ORDER BY part_index ASC",
+            "SELECT id, part_index, diff FROM patches WHERE patchset_id = ? ORDER BY part_index ASC",
             libsql::params![patchset_id]
         ).await?;
 
         let mut diffs = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
-            let index: i64 = row.get(0).unwrap_or(0);
-            let diff: String = row.get(1)?;
-            diffs.push((index, diff));
+            let id: i64 = row.get(0)?;
+            let index: i64 = row.get(1).unwrap_or(0);
+            let diff: String = row.get(2)?;
+            diffs.push((id, index, diff));
         }
         Ok(diffs)
     }
