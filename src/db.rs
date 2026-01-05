@@ -96,10 +96,13 @@ impl Database {
     }
 
     pub async fn get_message_details_by_msgid(&self, msg_id: &str) -> Result<Option<MessageRow>> {
-        let mut rows = self.conn.query(
-            "SELECT id FROM messages WHERE message_id = ?",
-             libsql::params![msg_id],
-        ).await?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id FROM messages WHERE message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
 
         if let Ok(Some(row)) = rows.next().await {
             let id: i64 = row.get(0)?;
@@ -109,22 +112,31 @@ impl Database {
         }
     }
 
-    pub async fn get_patchset_details_by_msgid(&self, msg_id: &str) -> Result<Option<serde_json::Value>> {
+    pub async fn get_patchset_details_by_msgid(
+        &self,
+        msg_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
         // 1. Try to find a patchset where this is the cover letter
-        let mut rows = self.conn.query(
-            "SELECT id FROM patchsets WHERE cover_letter_message_id = ?",
-             libsql::params![msg_id],
-        ).await?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id FROM patchsets WHERE cover_letter_message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
         if let Ok(Some(row)) = rows.next().await {
             let id: i64 = row.get(0)?;
             return self.get_patchset_details(id).await;
         }
 
         // 2. Fallback: Find a patchset that contains this message as a patch
-        let mut rows = self.conn.query(
-            "SELECT patchset_id FROM patches WHERE message_id = ?",
-             libsql::params![msg_id],
-        ).await?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT patchset_id FROM patches WHERE message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
         if let Ok(Some(row)) = rows.next().await {
             let id: i64 = row.get(0)?;
             return self.get_patchset_details(id).await;
@@ -134,10 +146,13 @@ impl Database {
     }
 
     pub async fn get_message_body(&self, msg_id: &str) -> Result<Option<String>> {
-        let mut rows = self.conn.query(
-            "SELECT body, git_blob_hash, mailing_list FROM messages WHERE message_id = ?",
-            libsql::params![msg_id],
-        ).await?;
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT body, git_blob_hash, mailing_list FROM messages WHERE message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
 
         if let Ok(Some(row)) = rows.next().await {
             let body: Option<String> = row.get(0).ok();
@@ -149,19 +164,19 @@ impl Database {
             // Try git blob
             let hash: Option<String> = row.get(1).ok();
             let group: Option<String> = row.get(2).ok();
-            
+
             if let (Some(_h), Some(_g)) = (hash, group) {
-                 // We don't have easy access to git_ops::read_blob here without repo path.
-                 // Assuming db shouldn't know about repo path logic or we pass it?
-                 // Reviewer service has repo path.
-                 // Let's just return None if body is empty in DB, and let caller handle blob if needed.
-                 // But for base-commit, we need the body.
-                 // Ideally body is populated in DB if small?
-                 // Sashiko stores body in DB unless it's a huge patch?
-                 // "body_to_store" in main.rs logic: 
-                 // `if is_git_hash { ("", Some(hash)) } else { (body, None) }`
-                 // So if it's from git archive, body is empty in DB.
-                 return Ok(None);
+                // We don't have easy access to git_ops::read_blob here without repo path.
+                // Assuming db shouldn't know about repo path logic or we pass it?
+                // Reviewer service has repo path.
+                // Let's just return None if body is empty in DB, and let caller handle blob if needed.
+                // But for base-commit, we need the body.
+                // Ideally body is populated in DB if small?
+                // Sashiko stores body in DB unless it's a huge patch?
+                // "body_to_store" in main.rs logic:
+                // `if is_git_hash { ("", Some(hash)) } else { (body, None) }`
+                // So if it's from git archive, body is empty in DB.
+                return Ok(None);
             }
             Ok(None)
         } else {
@@ -184,8 +199,16 @@ impl Database {
 
         // Enable WAL mode for better concurrency
         // PRAGMA journal_mode returns a row (the new mode), so we must use query() instead of execute()
-        let _ = conn.query("PRAGMA journal_mode=WAL;", ()).await?.next().await;
-        let _ = conn.query("PRAGMA busy_timeout = 5000;", ()).await?.next().await;
+        let _ = conn
+            .query("PRAGMA journal_mode=WAL;", ())
+            .await?
+            .next()
+            .await;
+        let _ = conn
+            .query("PRAGMA busy_timeout = 5000;", ())
+            .await?
+            .next()
+            .await;
 
         Ok(Self { conn })
     }
@@ -208,17 +231,15 @@ impl Database {
             .try_add_column("messages", "mailing_list", "TEXT")
             .await;
         let _ = self
-            .try_create_index("idx_patchsets_cover_message_id", "patchsets", "cover_letter_message_id")
+            .try_create_index(
+                "idx_patchsets_cover_message_id",
+                "patchsets",
+                "cover_letter_message_id",
+            )
             .await;
-        let _ = self
-            .try_add_column("patches", "status", "TEXT")
-            .await;
-        let _ = self
-            .try_add_column("patches", "apply_error", "TEXT")
-            .await;
-        let _ = self
-            .try_add_column("reviews", "provider", "TEXT")
-            .await;
+        let _ = self.try_add_column("patches", "status", "TEXT").await;
+        let _ = self.try_add_column("patches", "apply_error", "TEXT").await;
+        let _ = self.try_add_column("reviews", "provider", "TEXT").await;
         let _ = self
             .try_add_column("reviews", "prompts_git_hash", "TEXT")
             .await;
@@ -266,7 +287,10 @@ impl Database {
     }
 
     async fn try_create_index(&self, index_name: &str, table: &str, column: &str) -> Result<()> {
-        let sql = format!("CREATE INDEX IF NOT EXISTS {} ON {}({})", index_name, table, column);
+        let sql = format!(
+            "CREATE INDEX IF NOT EXISTS {} ON {}({})",
+            index_name, table, column
+        );
         if let Err(e) = self.conn.execute(&sql, ()).await {
             info!("Migration: Error creating index {}: {}", index_name, e);
         } else {
@@ -573,6 +597,52 @@ impl Database {
         git_blob_hash: Option<&str>,
         mailing_list: Option<&str>,
     ) -> Result<()> {
+        // Check for thread merge (Thread split resolution)
+        if let Ok(Some(old_thread_id)) = self.get_thread_id_for_message(message_id).await {
+            if old_thread_id != thread_id {
+                info!("Merging thread {} into {}", old_thread_id, thread_id);
+                // 1. Move messages
+                self.conn
+                    .execute(
+                        "UPDATE messages SET thread_id = ? WHERE thread_id = ?",
+                        libsql::params![thread_id, old_thread_id],
+                    )
+                    .await?;
+
+                // 2. Move patchsets
+                self.conn
+                    .execute(
+                        "UPDATE patchsets SET thread_id = ? WHERE thread_id = ?",
+                        libsql::params![thread_id, old_thread_id],
+                    )
+                    .await?;
+
+                // 3. Merge subsystems
+                self.conn
+                    .execute(
+                        "UPDATE OR IGNORE threads_subsystems SET thread_id = ? WHERE thread_id = ?",
+                        libsql::params![thread_id, old_thread_id],
+                    )
+                    .await?;
+
+                // 4. Merge tags
+                self.conn
+                    .execute(
+                        "UPDATE OR IGNORE threads_tags SET thread_id = ? WHERE thread_id = ?",
+                        libsql::params![thread_id, old_thread_id],
+                    )
+                    .await?;
+
+                // 5. Delete old thread
+                self.conn
+                    .execute(
+                        "DELETE FROM threads WHERE id = ?",
+                        libsql::params![old_thread_id],
+                    )
+                    .await?;
+            }
+        }
+
         // Use INSERT OR REPLACE to handle updating placeholders
         // But we want to preserve thread_id if it was set by placeholder (which is correct).
         // Actually, if we are "creating" the real message now, we should overwrite the placeholder fields.
@@ -964,7 +1034,7 @@ impl Database {
         // We use p.* alias implicitely by using unqualified names in WHERE which is fine given no collisions.
         // But for clarity/safety we should alias in FROM.
         // build_search returns "WHERE author ...".
-        
+
         let sql = format!(
             "SELECT p.id, p.subject, p.status, p.thread_id, p.author, p.date, p.cover_letter_message_id, p.total_parts, p.received_parts, GROUP_CONCAT(s.name, ',') 
              FROM patchsets p
@@ -989,7 +1059,10 @@ impl Database {
         while let Ok(Some(row)) = rows.next().await {
             let subsystems_str: Option<String> = row.get(9).ok();
             let subsystems = if let Some(s) = subsystems_str {
-                s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -1088,14 +1161,17 @@ impl Database {
     }
 
     pub async fn get_patchset_details(&self, id: i64) -> Result<Option<serde_json::Value>> {
-        let mut rows = self.conn.query(
-            "SELECT p.id, p.subject, p.status, p.to_recipients, p.cc_recipients, 
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT p.id, p.subject, p.status, p.to_recipients, p.cc_recipients, 
                     p.author, p.date, p.cover_letter_message_id, p.thread_id,
                     p.total_parts, p.received_parts
              FROM patchsets p 
              WHERE p.id = ?",
-            libsql::params![id],
-        ).await?;
+                libsql::params![id],
+            )
+            .await?;
 
         if let Ok(Some(row)) = rows.next().await {
             let pid: i64 = row.get(0)?;
@@ -1147,12 +1223,15 @@ impl Database {
 
             // Fetch subsystems
             let mut subsystems = Vec::new();
-            let mut sub_rows = self.conn.query(
-                "SELECT s.name FROM subsystems s
+            let mut sub_rows = self
+                .conn
+                .query(
+                    "SELECT s.name FROM subsystems s
                  JOIN patchsets_subsystems ps ON s.id = ps.subsystem_id
                  WHERE ps.patchset_id = ?",
-                libsql::params![pid],
-            ).await?;
+                    libsql::params![pid],
+                )
+                .await?;
             while let Ok(Some(row)) = sub_rows.next().await {
                 subsystems.push(row.get::<String>(0)?);
             }
@@ -1261,14 +1340,22 @@ impl Database {
     }
 
     pub async fn update_patchset_status(&self, id: i64, status: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE patchsets SET status = ? WHERE id = ?",
-            libsql::params![status, id],
-        ).await?;
+        self.conn
+            .execute(
+                "UPDATE patchsets SET status = ? WHERE id = ?",
+                libsql::params![status, id],
+            )
+            .await?;
         Ok(())
     }
 
-    pub async fn update_patch_application_status(&self, patchset_id: i64, part_index: i64, status: &str, error: Option<&str>) -> Result<()> {
+    pub async fn update_patch_application_status(
+        &self,
+        patchset_id: i64,
+        part_index: i64,
+        status: &str,
+        error: Option<&str>,
+    ) -> Result<()> {
         self.conn.execute(
             "UPDATE patches SET status = ?, apply_error = ? WHERE patchset_id = ? AND part_index = ?",
             libsql::params![status, error, patchset_id, part_index],
@@ -1277,18 +1364,23 @@ impl Database {
     }
 
     pub async fn reset_reviewing_status(&self) -> Result<u64> {
-        let count = self.conn.execute(
-            "UPDATE patchsets SET status = 'Pending' WHERE status = 'Reviewing'",
-            (),
-        ).await?;
+        let count = self
+            .conn
+            .execute(
+                "UPDATE patchsets SET status = 'Pending' WHERE status = 'Reviewing'",
+                (),
+            )
+            .await?;
         Ok(count)
     }
 
-    pub async fn get_patchset_counts_by_status(&self) -> Result<std::collections::HashMap<String, usize>> {
-        let mut rows = self.conn.query(
-            "SELECT status, COUNT(*) FROM patchsets GROUP BY status",
-            (),
-        ).await?;
+    pub async fn get_patchset_counts_by_status(
+        &self,
+    ) -> Result<std::collections::HashMap<String, usize>> {
+        let mut rows = self
+            .conn
+            .query("SELECT status, COUNT(*) FROM patchsets GROUP BY status", ())
+            .await?;
 
         let mut counts = std::collections::HashMap::new();
         while let Ok(Some(row)) = rows.next().await {
