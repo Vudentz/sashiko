@@ -195,10 +195,10 @@
                     }
 
                     if (statusText === "Review completed successfully.") {
-                         statusText = hasRegressions ? `${regressionCount} regressions found` : 'No regressions found';
+                         statusText = hasRegressions ? `${regressionCount} potential regressions found` : 'No regressions found';
                     } else if (hasRegressions) {
                          // append info if text is different
-                         statusText += ` (${regressionCount} regressions found)`;
+                         statusText += ` (${regressionCount} potential regressions found)`;
                     }
 
                     let resultStyle = '';
