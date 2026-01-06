@@ -5,415 +5,321 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LLM Interaction Log</title>
     <style>
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
-            max-width: 1400px; 
-            margin: 0 auto; 
-            padding: 20px; 
-            background-color: #f6f8fa; 
-            color: #24292f;
-        }
-        h1 { border-bottom: 1px solid #d0d7de; padding-bottom: 10px; margin-bottom: 20px; font-size: 1.5em; }
-        
-        .header-meta {
-            background: white;
-            padding: 15px;
-            border: 1px solid #d0d7de;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            font-size: 0.9em;
-        }
-        .meta-item { display: flex; flex-direction: column; }
-        .meta-label { font-weight: bold; color: #57606a; font-size: 0.8em; margin-bottom: 2px; }
-
-        .chat-container {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
+        :root {
+            --color-canvas-default: #ffffff;
+            --color-canvas-subtle: #f6f8fa;
+            --color-border-default: #d0d7de;
+            --color-border-muted: #d8dee4;
+            --color-fg-default: #24292f;
+            --color-fg-muted: #57606a;
+            --color-accent-fg: #0969da;
+            --color-success-fg: #1a7f37;
+            --color-attention-fg: #9a6700;
+            --color-danger-fg: #cf222e;
+            --color-role-user: #0969da;
+            --color-role-model: #8a63d2;
+            --color-role-tool: #6e7781;
         }
 
-        .message-row {
-            display: flex;
-            width: 100%;
-        }
-
-        .message-row.user { justify-content: flex-start; }
-        .message-row.model { justify-content: flex-end; }
-        .message-row.tool { justify-content: center; }
-
-        .message-bubble {
-            max-width: 85%;
-            padding: 10px 15px;
-            border-radius: 6px;
-            position: relative;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-            overflow-wrap: break-word;
-            min-width: 300px;
-        }
-
-        .user .message-bubble {
-            background-color: #ffffff;
-            border: 1px solid #d0d7de;
-            border-left: 4px solid #0969da;
-        }
-
-        .model .message-bubble {
-            background-color: #f1f8ff; /* Light blue tint */
-            border: 1px solid #c8e1ff;
-            border-right: 4px solid #0969da;
-        }
-
-        .tool .message-bubble {
-            background-color: #fff8c5; /* Light yellow/warning for tool calls */
-            border: 1px solid #d0d7de;
-            border-top: 4px solid #9a6700; 
-            max-width: 95%;
-            font-size: 0.9em;
-        }
-
-        /* Differentiate Function Response from Function Call visually if possible, 
-           but they are often in the same 'function' role or mixed. 
-           Let's handle inside the content rendering. */
-
-        .role-badge {
-            font-size: 0.75em;
-            font-weight: bold;
-            color: #57606a;
-            margin-bottom: 5px;
-            text-transform: uppercase;
-            display: block;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 3px;
-        }
-        
-        .content-block {
-            white-space: pre-wrap;
+        body {
             font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-            font-size: 0.9em;
-            margin-bottom: 8px;
-        }
-        
-        .text-part {
-            margin-bottom: 10px;
+            font-size: 13px;
+            line-height: 1.5;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: var(--color-canvas-subtle);
+            color: var(--color-fg-default);
         }
 
-        /* Collapsible formatting */
-        .collapsible {
-            border: 1px solid #d0d7de;
-            border-radius: 4px;
-            margin-top: 5px;
-            background: white;
-            overflow: hidden;
-        }
-        .collapsible-header {
-            background: #f6f8fa;
-            padding: 5px 10px;
-            cursor: pointer;
-            font-size: 0.85em;
-            font-weight: bold;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            user-select: none;
-            color: #0969da;
-        }
-        .collapsible-header:hover { background: #eef1f4; text-decoration: underline; }
-        .collapsible-content {
-            padding: 10px;
-            display: none;
-            overflow-x: auto;
-            border-top: 1px solid #d0d7de;
-            background-color: #fff;
-        }
-        .collapsible.open .collapsible-content { display: block; }
-        .collapsible.open .arrow::after { content: '▼'; }
-        .arrow::after { content: '▶'; font-size: 0.8em; margin-left: 5px; }
-
-        pre { margin: 0; }
-        code { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
-
-        /* Function Call Styling */
-        .fn-call-box {
-            background: #fffbdd;
-            border: 1px solid #e3d06f;
-            border-radius: 4px;
-            padding: 8px;
-            margin-bottom: 10px;
-        }
-        .fn-resp-box {
-            background: #f0fdf4;
-            border: 1px solid #bbf7d0;
-            border-radius: 4px;
-            padding: 8px;
-            margin-bottom: 10px;
-        }
-        
-        .fn-name { font-weight: bold; font-family: monospace; font-size: 1.1em; display: inline-block; margin-bottom: 5px; }
-        .fn-call-box .fn-name { color: #d9534f; } /* Reddish for call */
-        .fn-resp-box .fn-name { color: #15803d; } /* Greenish for response */
-
-        a { color: #0969da; text-decoration: none; }
+        a { color: var(--color-accent-fg); text-decoration: none; }
         a:hover { text-decoration: underline; }
 
-        .back-link { display: inline-block; margin-bottom: 15px; }
-        
-        .truncated-hint {
-            color: #666;
-            font-style: italic;
+        .header { margin-bottom: 20px; display: flex; align-items: baseline; justify-content: space-between; border-bottom: 1px solid var(--color-border-default); padding-bottom: 10px; }
+        .header h1 { font-size: 1.2em; margin: 0; }
+        .meta-info { font-size: 0.9em; color: var(--color-fg-muted); }
+
+        .log-stream {
+            display: flex;
+            flex-direction: column;
+            gap: 0; /* Remove gap, use borders/margins on items */
+            background: var(--color-canvas-default);
+            border: 1px solid var(--color-border-default);
+            border-radius: 6px;
+            overflow: hidden;
+        }
+
+        .log-entry {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--color-border-muted);
+            display: flex;
+            gap: 12px;
+            position: relative;
+        }
+        .log-entry:last-child { border-bottom: none; }
+
+        .log-entry:hover { background-color: #fbfcfd; }
+
+        /* Role Indicators (Left Border Strip) */
+        .log-entry::before {
+            content: '';
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            width: 4px;
+        }
+        .role-user::before { background-color: var(--color-role-user); }
+        .role-model::before { background-color: var(--color-role-model); }
+        .role-tool::before { background-color: var(--color-role-tool); }
+
+        .role-icon {
+            flex-shrink: 0;
+            width: 24px;
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.1em;
+            padding-top: 2px;
+            user-select: none;
+        }
+        .role-user .role-icon { color: var(--color-role-user); }
+        .role-model .role-icon { color: var(--color-role-model); }
+        .role-tool .role-icon { color: var(--color-role-tool); }
+
+        .content { flex-grow: 1; min-width: 0; overflow-wrap: break-word; }
+
+        .role-label {
             font-size: 0.85em;
+            font-weight: 600;
+            color: var(--color-fg-muted);
+            margin-bottom: 2px;
+            display: block;
+        }
+
+        /* Content Blocks */
+        .text-block {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Tool Calls */
+        .tool-call {
+            font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+            background-color: #f6f8fa;
+            border: 1px solid var(--color-border-muted);
+            border-radius: 4px;
+            padding: 6px 8px;
+            margin: 4px 0;
+        }
+        .fn-name { color: var(--color-role-model); font-weight: bold; }
+        .fn-args { color: var(--color-fg-default); }
+
+        /* Tool Results */
+        .tool-result {
             margin-top: 4px;
+            color: var(--color-fg-muted);
+        }
+
+        /* Collapsibles */
+        .collapsible-trigger {
+            cursor: pointer;
+            color: var(--color-accent-fg);
+            font-size: 0.85em;
+            display: inline-flex;
+            align-items: center;
+            margin-top: 4px;
+            user-select: none;
+        }
+        .collapsible-trigger:hover { text-decoration: underline; }
+        .collapsible-content { display: none; margin-top: 6px; border-top: 1px dashed var(--color-border-muted); padding-top: 6px; }
+        .collapsible.open .collapsible-content { display: block; }
+        .arrow { font-size: 0.8em; margin-left: 4px; transition: transform 0.2s; }
+        .collapsible.open .arrow { transform: rotate(90deg); }
+
+        pre { margin: 0; background: none; font-family: inherit; }
+
+        .truncated-msg {
+            background: #fff8c5;
+            padding: 2px 6px;
+            font-size: 0.85em;
+            border-radius: 3px;
+            display: inline-block;
+            margin-bottom: 4px;
         }
     </style>
 </head>
 <body>
-    <a href="javascript:history.back()" class="back-link">← Back</a>
-    <h1>LLM Interaction Log</h1>
-    <div id="meta" class="header-meta">Loading metadata...</div>
-    <div id="chat" class="chat-container">
-        <div style="text-align: center; padding: 20px; color: #555;">Loading conversation...</div>
+    <div class="header">
+        <h1>
+            <a href="javascript:history.back()" style="margin-right: 10px; color: var(--color-fg-muted);">←</a>
+            LLM Interaction Log
+        </h1>
+        <div class="meta-info" id="meta-info">Loading...</div>
+    </div>
+
+    <div id="log-stream" class="log-stream">
+        <div style="padding: 20px; text-align: center; color: var(--color-fg-muted);">Loading conversation...</div>
     </div>
 
     <script>
         async function fetchLog() {
             const params = new URLSearchParams(window.location.search);
             const id = params.get('id');
-            if (!id) {
-                document.getElementById('chat').innerHTML = 'No Review ID provided.';
-                return;
-            }
+            if (!id) return;
 
             try {
                 const res = await fetch(`/api/review?id=${id}`);
-                if (!res.ok) throw new Error(res.statusText);
                 const data = await res.json();
                 render(data);
             } catch (e) {
-                document.getElementById('chat').innerHTML = `Error loading log: ${e.message}`;
+                document.getElementById('log-stream').innerHTML = `<div style="padding:20px; color:red">Error: ${e.message}</div>`;
             }
         }
 
         function render(data) {
-            // Render Meta
-            const date = new Date(data.created_at * 1000).toLocaleString();
-            document.getElementById('meta').innerHTML = `
-                <div class="meta-item"><span class="meta-label">ID</span><span>${data.id}</span></div>
-                <div class="meta-item"><span class="meta-label">Model</span><span>${data.model || '?'}</span></div>
-                <div class="meta-item"><span class="meta-label">Status</span><span>${data.status}</span></div>
-                <div class="meta-item"><span class="meta-label">Date</span><span>${date}</span></div>
-                <div class="meta-item"><span class="meta-label">Result</span><span>${data.result || '-'}</span></div>
-                <div class="meta-item"><span class="meta-label">Tokens</span><span>${data.tokens_in} in / ${data.tokens_out} out</span></div>
-            `;
+            // Meta
+            document.getElementById('meta-info').innerText =
+                `${data.model || '?'} • ${data.tokens_in + data.tokens_out} tokens • ${data.status}`;
 
-            const chatContainer = document.getElementById('chat');
-            chatContainer.innerHTML = '';
+            const container = document.getElementById('log-stream');
+            container.innerHTML = '';
 
             let logs = [];
-            try {
-                if (data.logs) {
-                    logs = JSON.parse(data.logs);
-                }
-            } catch (e) {
-                // If not JSON, render as single raw block
-                chatContainer.innerHTML = `<div class="message-row tool"><div class="message-bubble"><div class="role-badge">RAW LOG</div><pre class="content-block">${escapeHtml(data.logs)}</pre></div></div>`;
+            try { logs = JSON.parse(data.logs || '[]'); } catch(e) { logs = []; }
+
+            if (!Array.isArray(logs) || logs.length === 0) {
+                container.innerHTML = '<div style="padding:20px; text-align:center">No logs available.</div>';
                 return;
             }
 
-            if (!Array.isArray(logs)) {
-                 chatContainer.innerHTML = `<div class="message-row tool"><div class="message-bubble"><div class="role-badge">RAW LOG</div><pre class="content-block">${escapeHtml(JSON.stringify(logs, null, 2))}</pre></div></div>`;
-                 return;
-            }
-
-            if (logs.length === 0) {
-                chatContainer.innerHTML = '<p style="text-align:center">No interaction history found.</p>';
-                return;
-            }
-
-            logs.forEach(msg => {
-                const role = msg.role || 'unknown';
-                const parts = msg.parts || [];
+            logs.forEach(entry => {
+                const role = (entry.role || 'unknown').toLowerCase();
+                const parts = entry.parts || [];
                 
                 let contentHtml = '';
-                
                 parts.forEach(part => {
-                    // Check Part types: text, functionCall, functionResponse
-                    // Note: Rust Serialize might use "functionCall" or "function_call" depending on rename_all="camelCase".
-                    // src/ai/gemini.rs uses #[serde(rename_all = "camelCase")] for Content/Part/etc.
-                    // So keys should be: "text", "functionCall", "functionResponse".
-                    
                     if (part.text) {
-                        contentHtml += `<div class="text-part">${formatText(part.text)}</div>`;
-                    }
-                    else if (part.functionCall) {
-                        const signature = formatFunctionSignature(part.functionCall.name, part.functionCall.args);
+                        contentHtml += formatText(part.text);
+                    } 
+                    else if (part.functionCall || part.function_call) {
+                        const fc = part.functionCall || part.function_call;
+                        const sig = formatSignature(fc.name, fc.args);
                         contentHtml += `
-                            <div class="fn-call-box">
-                                <span class="fn-name">🔧 ${escapeHtml(signature)}</span>
-                                ${formatJson(part.functionCall.args, "Full Arguments", true)}
+                            <div class="tool-call">
+                                <span class="fn-name">${escapeHtml(sig.name)}</span>(<span class="fn-args">${escapeHtml(sig.args)}</span>)
+                                ${formatJson(fc.args, true)}
                             </div>
                         `;
                     }
-                    else if (part.functionResponse) {
+                    else if (part.functionResponse || part.function_response) {
+                        const fr = part.functionResponse || part.function_response;
                         contentHtml += `
-                            <div class="fn-resp-box">
-                                <span class="fn-name">✅ Response: ${escapeHtml(part.functionResponse.name)}</span>
-                                ${formatJson(part.functionResponse.response, "Return Value", true)}
-                            </div>
-                        `;
-                    }
-                    // Handle snake_case fallbacks just in case (e.g. if DB stored older version)
-                    else if (part.function_call) {
-                         const signature = formatFunctionSignature(part.function_call.name, part.function_call.args);
-                         contentHtml += `
-                            <div class="fn-call-box">
-                                <span class="fn-name">🔧 ${escapeHtml(signature)}</span>
-                                ${formatJson(part.function_call.args, "Full Arguments", true)}
-                            </div>
-                        `;
-                    }
-                    else if (part.function_response) {
-                         contentHtml += `
-                            <div class="fn-resp-box">
-                                <span class="fn-name">✅ Response: ${escapeHtml(part.function_response.name)}</span>
-                                ${formatJson(part.function_response.response, "Return Value", true)}
+                            <div class="tool-result">
+                                <span style="font-weight:bold; font-size:0.9em">➔ ${escapeHtml(fr.name)}</span> result:
+                                ${formatJson(fr.response, true)}
                             </div>
                         `;
                     }
                 });
 
-                const row = document.createElement('div');
-                row.className = `message-row ${role}`;
+                const div = document.createElement('div');
+                div.className = `log-entry role-${role === 'model' ? 'model' : (role === 'user' ? 'user' : 'tool')}`;
                 
-                // Friendly role names
-                let roleName = role.toUpperCase();
-                if (role === 'user') roleName = 'SASHIKO';
-                if (role === 'model') roleName = 'LLM';
-                if (role === 'function' || role === 'tool') roleName = 'TOOL';
+                let icon = '?';
+                let label = role.toUpperCase();
+                if (role === 'user') { icon = 'U'; label = 'Sashiko'; }
+                if (role === 'model') { icon = '🤖'; label = 'LLM'; }
+                if (role === 'tool' || role === 'function') { icon = '🔧'; label = 'Tool'; }
 
-                row.innerHTML = `
-                    <div class="message-bubble">
-                        <div class="role-badge">${roleName}</div>
+                div.innerHTML = `
+                    <div class="role-icon" title="${label}">${icon}</div>
+                    <div class="content">
+                        <div class="role-label">${label}</div>
                         ${contentHtml}
                     </div>
                 `;
-                chatContainer.appendChild(row);
+                container.appendChild(div);
             });
         }
 
-        function formatFunctionSignature(name, args) {
-            try {
-                // If args is string (sometimes happens with some LLMs/libraries), try parsing
-                if (typeof args === 'string') {
-                    try { args = JSON.parse(args); } catch (e) {}
-                }
+        function formatSignature(name, args) {
+            if (typeof args === 'string') { try { args = JSON.parse(args); } catch(e){} }
+            if (!args || typeof args !== 'object') return { name, args: '' };
 
-                if (!args || typeof args !== 'object') {
-                    return `${name}()`;
-                }
-
-                const parts = [];
-                for (const [key, value] of Object.entries(args)) {
-                    let valStr;
-                    if (typeof value === 'string') {
-                        valStr = `"${value}"`;
-                    } else {
-                        valStr = JSON.stringify(value);
-                    }
-                    parts.push(`${valStr}`); // Often positional args are better for reading, but we have named args.
-                    // The user example `list_dir(".")` implies positional style or just value?
-                    // But JSON args are key-value. 
-                    // `list_dir(path=".")` is clearer for named args. 
-                    // But if there is only one arg and it's obvious...
-                    // Let's stick to `key=value` or just `value` if it's common convention?
-                    // User said: `list_dir(".")`. This implies hiding the key if it's "path"?
-                    // Or maybe just showing values? 
-                    // Safest is `key=val` for generic tools. 
-                    // But let's try to be smart? No, keeps it simple: `key="value"`.
-                    // Wait, user example `list_dir(".")` is strictly `value`. 
-                    // If I output `path="."`, is that acceptable? Yes, likely better for clarity.
-                    // Let's use `key=value`.
-                    // Update: User specifically showed `list_dir(".")`.
-                    // If I use `path="."`, it might be `list_dir(path=".")`.
-                    // Let's go with `val` if there's only 1 arg? No, keys matter.
-                    // I will format as `key=value` to be safe and clear. 
-                    // Exception: if the user explicitly wants `list_dir(".")`, maybe they mean just values.
-                    // I'll produce `key=value` as it's more correct for JSON args.
-                    
-                    // Actually, let's look at the user prompt again: `list_dir(".")`.
-                    // This looks like python style positional.
-                    // But we receive `{ "path": "." }`.
-                    // If I render `list_dir(path=".")`, it's close enough and unambiguous.
-                    
-                    parts.push(`${key}=${valStr}`);
-                }
-                return `${name}(${parts.join(', ')})`;
-            } catch (e) {
-                return `${name}(...)`;
+            const pairs = [];
+            for (const [k, v] of Object.entries(args)) {
+                // Formatting value: if string, quote it. if number/bool, literal. if obj, compact json?
+                let valStr;
+                if (typeof v === 'string') valStr = "\"${v}\"";
+                else if (typeof v === 'object' && v !== null) valStr = '{...}'; // simplified for signature
+                else valStr = String(v);
+                pairs.push(`${k}=${valStr}`);
             }
+            return { name, args: pairs.join(', ') };
         }
 
         function formatText(text) {
             if (!text) return '';
-            const lines = text.split('\n');
-            const maxLines = 5;
+            const maxLen = 600;
+            const maxLines = 8;
             
-            if (lines.length > maxLines + 2) { // +2 buffer so we don't collapse just 1 extra line
-                const preview = lines.slice(0, maxLines).join('\n');
-                const rest = lines.slice(maxLines).join('\n');
+            // Check line count
+            const lines = text.split('\n');
+            const isLong = text.length > maxLen || lines.length > maxLines;
+
+            if (isLong) {
+                // Create preview
+                let preview = text.substring(0, maxLen);
+                if (lines.length > maxLines) {
+                    preview = lines.slice(0, maxLines).join('\n');
+                }
+                
+                // Ensure we didn't cut in middle of a line badly if using char limit, 
+                // but pre-wrap handles it.
                 
                 return `
-                    <div class="content-block">${escapeHtml(preview)}</div>
-                    <div class="truncated-hint">... ${lines.length - maxLines} lines hidden ...</div>
                     <div class="collapsible">
-                        <div class="collapsible-header" onclick="this.parentElement.classList.toggle('open')">
-                            Show Full Text <span class="arrow"></span>
+                        <div class="text-block">${escapeHtml(preview)} ...</div>
+                        <div class="collapsible-trigger" onclick="this.parentElement.classList.toggle('open')">
+                            Show full text (${text.length} chars) <span class="arrow">▶</span>
                         </div>
                         <div class="collapsible-content">
-                            <pre class="content-block">${escapeHtml(text)}</pre>
+                            <div class="text-block">${escapeHtml(text)}</div>
                         </div>
                     </div>
                 `;
             }
-            return `<div class="content-block">${escapeHtml(text)}</div>`;
+            return `<div class="text-block">${escapeHtml(text)}</div>`;
         }
 
-        function formatJson(obj, label, forceCollapse = false) {
-            const jsonStr = JSON.stringify(obj, null, 2);
-            const lines = jsonStr.split('\n');
-            const maxLines = 5;
-
-            // If forceCollapse is true, always hide behind toggle
-            if (forceCollapse || lines.length > maxLines + 2) {
-                 const preview = forceCollapse ? '' : lines.slice(0, maxLines).join('\n') + ' ... }';
-                 const headerText = label + (forceCollapse ? '' : ' (Full JSON)');
-                 
-                 // If forceCollapse, we don't show preview text outside? Or maybe just "Show ..."?
-                 // Let's just return a collapsible.
-                 
-                 return `
-                    <div class="collapsible">
-                        <div class="collapsible-header" onclick="this.parentElement.classList.toggle('open')">
-                            ${headerText} <span class="arrow"></span>
-                        </div>
-                        <div class="collapsible-content">
-                            <pre class="content-block">${escapeHtml(jsonStr)}</pre>
-                        </div>
-                    </div>
-                 `;
-            } else {
-                return `
-                    <div style="margin-top:5px; font-weight:bold; font-size:0.8em; color:#555;">${label}:</div>
-                    <pre class="content-block" style="background:rgba(255,255,255,0.5); padding:5px; border-radius:3px;">${escapeHtml(jsonStr)}</pre>
-                `;
+        function formatJson(obj, collapse = false) {
+            const str = JSON.stringify(obj, null, 2);
+            if (!str) return '';
+            
+            // If it's a small object (one line), show inline?
+            // User requested to "collapse it", so generally hide it.
+            // But if it's super short like `{"status":"ok"}`, hiding it is annoying.
+            // Let's hide if > 1 line.
+            
+            const isMultiLine = str.includes('\n');
+            
+            if (!isMultiLine && str.length < 80) {
+                 return `<pre style="display:inline; color:#555;">${escapeHtml(str)}</pre>`;
             }
+
+            // Otherwise collapsible
+            return `
+                <div class="collapsible">
+                     <div class="collapsible-trigger" onclick="this.parentElement.classList.toggle('open')">
+                        ${collapse ? 'Show JSON' : 'Hide JSON'} <span class="arrow">▶</span>
+                    </div>
+                    <div class="collapsible-content">
+                        <pre class="text-block" style="font-size:0.9em; color:#444;">${escapeHtml(str)}</pre>
+                    </div>
+                </div>
+            `;
         }
 
-        function escapeHtml(text) {
-            if (typeof text !== 'string') return '';
-            return text
-                .replace(/&/g, "&amp;")
+        function escapeHtml(str) {
+            return (str || '').replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;")
                 .replace(/"/g, "&quot;")
