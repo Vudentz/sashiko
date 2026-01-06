@@ -9,7 +9,6 @@ use sashiko::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::io::Read;
 use std::path::PathBuf;
 use tracing::{error, info};
 
@@ -70,9 +69,9 @@ async fn main() -> Result<()> {
 
     // Data Loading Strategy: DB vs JSON Stdin
     let (patchset_id, subject, patches) = if args.json {
-        // Read from Stdin
+        // Read from Stdin (Line-based for conversational support)
         let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer)?;
+        std::io::stdin().read_line(&mut buffer)?;
         let input: ReviewInput = serde_json::from_str(&buffer)?;
 
         info!(
@@ -201,14 +200,20 @@ async fn main() -> Result<()> {
                 "tokens_in": 0,
                 "tokens_out": 0
             });
-            println!("{}", serde_json::to_string_pretty(&result_json)?);
+            println!("{}", serde_json::to_string(&result_json)?);
         } else {
             info!(
                 "Patches applied. Starting AI review for {} patches...",
                 patches_to_review.len()
             );
             let model_name = args.model.unwrap_or_else(|| settings.ai.model.clone());
-            let client = GeminiClient::new(model_name);
+
+            let client: Box<dyn sashiko::ai::gemini::GenAiClient> = if args.json {
+                Box::new(sashiko::ai::gemini::StdioGeminiClient)
+            } else {
+                Box::new(GeminiClient::new(model_name))
+            };
+
             let tools = ToolBox::new(worktree.path.clone(), args.prompts.clone());
             let prompts = PromptRegistry::new(args.prompts.clone());
             let mut agent = Agent::new(client, tools, prompts, settings.ai.max_input_words);
@@ -249,7 +254,7 @@ async fn main() -> Result<()> {
                         "tokens_in": result.tokens_in,
                         "tokens_out": result.tokens_out
                     });
-                    println!("{}", serde_json::to_string_pretty(&result_json)?);
+                    println!("{}", serde_json::to_string(&result_json)?);
                 }
                 Err(e) => {
                     error!("AI review failed with exception: {}", e);
@@ -260,7 +265,7 @@ async fn main() -> Result<()> {
                         "patches": patch_results,
                         "error": e.to_string()
                     });
-                    println!("{}", serde_json::to_string_pretty(&result_json)?);
+                    println!("{}", serde_json::to_string(&result_json)?);
                 }
             }
         }
@@ -272,7 +277,7 @@ async fn main() -> Result<()> {
             "patches": patch_results,
             "error": "Patch application failed"
         });
-        println!("{}", serde_json::to_string_pretty(&result_json)?);
+        println!("{}", serde_json::to_string(&result_json)?);
     }
 
     worktree.remove().await?;

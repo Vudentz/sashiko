@@ -14,15 +14,15 @@ impl Truncator {
 
         let lines: Vec<&str> = diff.lines().collect();
         let total_lines = lines.len();
-        
+
         // Simple strategy: Keep top N lines and bottom M lines.
         // We want to keep file headers (usually at the top).
-        
+
         // Let's aim for 1 token per 4 chars.
         // max_tokens * 4 = max_chars.
         // Approx chars per line ~ 50 (heuristic).
         let max_lines = (max_tokens * 4) / 50;
-        
+
         if total_lines <= max_lines {
             return diff.to_string(); // Should have been caught by token check, but just in case
         }
@@ -55,12 +55,12 @@ impl Truncator {
 
     /// Smart truncation for code files.
     /// tries to preserve context around `focus_lines`.
-    /// 
+    ///
     /// `focus_lines` is 1-based inclusive range.
     pub fn truncate_code(
-        content: &str, 
+        content: &str,
         focus_lines: Option<Range<usize>>,
-        max_tokens: usize
+        max_tokens: usize,
     ) -> String {
         let estimated = TokenBudget::estimate_tokens(content);
         if estimated <= max_tokens {
@@ -73,7 +73,7 @@ impl Truncator {
         let (start_focus, end_focus) = if let Some(range) = focus_lines {
             (range.start.max(1) - 1, range.end.min(total_lines))
         } else {
-            // If no focus, just take the top part? 
+            // If no focus, just take the top part?
             // Or maybe searching for "main" functions?
             // For now, let's default to head/tail strategy if no focus.
             return Self::truncate_diff(content, max_tokens);
@@ -86,7 +86,7 @@ impl Truncator {
         let end_keep = (end_focus + context_size).min(total_lines);
 
         let mut result = String::new();
-        
+
         // Add header info if we are skipping the start
         if start_keep > 0 {
             result.push_str(&format!("... [{} lines collapsed] ...\n", start_keep));
@@ -98,15 +98,18 @@ impl Truncator {
         }
 
         if end_keep < total_lines {
-            result.push_str(&format!("... [{} lines collapsed] ...\n", total_lines - end_keep));
+            result.push_str(&format!(
+                "... [{} lines collapsed] ...\n",
+                total_lines - end_keep
+            ));
         }
 
         // Check if we met the budget. If not, we might need to be stricter.
-        // For now, return what we have. 
+        // For now, return what we have.
         // A more advanced version would iteratively shrink context.
         result
     }
-    
+
     // Future: Add AST-based collapsing here.
     #[allow(dead_code)]
     fn regex_collapse(_content: &str) -> String {
@@ -123,14 +126,17 @@ mod tests {
     fn test_truncate_diff() {
         let diff = "line1\nline2\nline3\nline4\nline5\nline6";
         // very small budget
-        let truncated = Truncator::truncate_diff(diff, 1); 
+        let truncated = Truncator::truncate_diff(diff, 1);
         assert!(truncated.contains("Diff truncated"));
     }
 
     #[test]
     fn test_truncate_code_focus() {
-        let code = (0..100).map(|i| format!("line {}", i)).collect::<Vec<_>>().join("\n");
-        
+        let code = (0..100)
+            .map(|i| format!("line {}", i))
+            .collect::<Vec<_>>()
+            .join("\n");
+
         let truncated = Truncator::truncate_code(&code, Some(50..55), 10);
         // It should keep lines around 50-55.
         assert!(truncated.contains("line 50"));

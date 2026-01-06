@@ -8,7 +8,7 @@ mod tools_test;
 use crate::agent::prompts::PromptRegistry;
 use crate::agent::tools::ToolBox;
 use crate::ai::gemini::{
-    Content, FunctionResponse, GeminiClient, GenerateContentRequest, GenerationConfig, Part,
+    Content, FunctionResponse, GenAiClient, GenerateContentRequest, GenerationConfig, Part,
 };
 use crate::ai::token_budget::TokenBudget;
 use anyhow::{Result, anyhow};
@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use tracing::{info, warn};
 
 pub struct Agent {
-    client: GeminiClient,
+    client: Box<dyn GenAiClient>,
     tools: ToolBox,
     prompts: PromptRegistry,
     history: Vec<Content>,
@@ -34,7 +34,7 @@ pub struct AgentResult {
 
 impl Agent {
     pub fn new(
-        client: GeminiClient,
+        client: Box<dyn GenAiClient>,
         tools: ToolBox,
         prompts: PromptRegistry,
         max_input_words: usize,
@@ -77,9 +77,7 @@ impl Agent {
                 }
                 Part::FunctionResponse { function_response } => {
                     count += TokenBudget::estimate_tokens(&function_response.name);
-                    count += TokenBudget::estimate_tokens(
-                        &function_response.response.to_string(),
-                    );
+                    count += TokenBudget::estimate_tokens(&function_response.response.to_string());
                 }
             }
         }
@@ -107,7 +105,10 @@ impl Agent {
             let removed = self.history.remove(1);
             let removed_tokens = self.estimate_content_tokens(&removed);
             current_tokens = current_tokens.saturating_sub(removed_tokens);
-            info!("Pruned message with {} tokens. Remaining: {}", removed_tokens, current_tokens);
+            info!(
+                "Pruned message with {} tokens. Remaining: {}",
+                removed_tokens, current_tokens
+            );
         }
     }
 
@@ -211,9 +212,12 @@ impl Agent {
                     temperature: Some(0.2),
                 }),
             };
-            
+
             let token_count = self.estimate_history_tokens(&req.system_instruction);
-            info!("Sending request to Gemini ({} estimated tokens)...", token_count);
+            info!(
+                "Sending request to Gemini ({} estimated tokens)...",
+                token_count
+            );
 
             let resp = self.client.generate_content(req).await?;
 

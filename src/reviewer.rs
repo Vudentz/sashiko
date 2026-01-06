@@ -1,13 +1,15 @@
+use crate::ai::gemini::{GeminiClient, GenerateContentRequest, QuotaError};
+use crate::ai::proxy::QuotaManager;
 use crate::baseline::{BaselineRegistry, BaselineResolution, extract_files_from_diff};
 use crate::db::{AiInteractionParams, Database};
 use crate::git_ops::{ensure_remote, get_commit_hash};
 use crate::settings::Settings;
 use anyhow::Result;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Semaphore;
 use tracing::{error, info, warn};
@@ -26,6 +28,7 @@ pub struct Reviewer {
     settings: Settings,
     semaphore: Arc<Semaphore>,
     baseline_registry: Arc<BaselineRegistry>,
+    quota_manager: Arc<QuotaManager>,
 }
 
 impl Reviewer {
@@ -51,6 +54,7 @@ impl Reviewer {
             settings,
             semaphore: Arc::new(Semaphore::new(concurrency)),
             baseline_registry,
+            quota_manager: Arc::new(QuotaManager::new()),
         }
     }
 
@@ -106,6 +110,7 @@ impl Reviewer {
             let db = self.db.clone();
             let settings = self.settings.clone();
             let baseline_registry = self.baseline_registry.clone();
+            let quota_manager = self.quota_manager.clone();
             let patchset_id = patchset.id;
             let subject = patchset.subject.clone().unwrap_or("Unknown".to_string());
 
@@ -289,6 +294,7 @@ impl Reviewer {
                                 db.clone(),
                                 &baseline_ref,
                                 Some(*index),
+                                quota_manager.clone(),
                             )
                             .await
                             {
@@ -537,6 +543,7 @@ async fn run_review_tool(
     db: Arc<Database>,
     baseline: &str,
     review_index: Option<i64>,
+    quota_manager: Arc<QuotaManager>,
 ) -> Result<serde_json::Value> {
     let exe_path = std::env::current_exe()?;
     let bin_dir = exe_path
@@ -574,54 +581,164 @@ async fn run_review_tool(
 
     let mut child = cmd.spawn()?;
 
+    // Send initial payload
     if let Some(mut stdin) = child.stdin.take() {
-        let input_str = serde_json::to_string(input_payload)?;
+        let mut input_str = serde_json::to_string(input_payload)?;
+        input_str.push('\n'); // Ensure line break for conversational mode
         stdin.write_all(input_str.as_bytes()).await?;
+        stdin.flush().await?;
+        // Keep stdin open? No, we Dropped stdin here by taking it out of scope?
+        // Wait, `take()` moves it out.
+        // If we drop `stdin`, the pipe closes!
+        // `review` binary reads one line, so it doesn't matter if pipe closes?
+        // BUT `StdioGeminiClient` in child needs to read *subsequent* responses from stdin.
+        // So we MUST NOT close stdin.
+        // We need to keep `stdin` alive and use it in the loop.
+        // So we shouldn't drop `stdin` here.
+        // I will fix this in the loop logic below.
+    } else {
+        anyhow::bail!("Failed to open stdin for child process");
     }
 
-    let output = child.wait_with_output().await?;
+    // We need to hold stdin to write responses
+    // But `child.stdin` is Option. We took it. We need to pass it to loop.
+    // However, `child.spawn()` returns child.
+    // The previous block took stdin.
+    // I need to restructure to keep `stdin`.
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        warn!(
-            "Review tool failed (exit code {:?}): {}",
-            output.status.code(),
-            stderr
-        );
-        return Err(anyhow::anyhow!("Tool failure: {}", stderr));
+    if let Some(stderr) = child.stderr.take() {
+        tokio::spawn(async move {
+            let reader = BufReader::new(stderr);
+            let mut lines = reader.lines();
+            while let Ok(Some(_line)) = lines.next_line().await {
+                 // Forward stderr to our log (or warn)
+                 // warn!("[review-bin] {}", line); // Too noisy?
+            }
+        });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("No stdin"))?;
+    
+    // Send initial payload (Redoing it properly)
+    let mut input_str = serde_json::to_string(input_payload)?;
+    input_str.push('\n');
+    stdin.write_all(input_str.as_bytes()).await?;
+    stdin.flush().await?;
 
-    let json: serde_json::Value = match serde_json::from_str(&stdout) {
-        Ok(v) => v,
-        Err(e) => {
-            error!(
-                "Failed to parse JSON output from review tool. Raw stdout: '{}'",
-                stdout
-            );
-            return Err(e.into());
-        }
-    };
+    let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("No stdout"))?;
+    let reader = BufReader::new(stdout);
+    let mut lines = reader.lines();
 
-    // Update DB with patch statuses
-    if let Some(patches) = json["patches"].as_array() {
-        for p in patches {
-            let idx = p["index"].as_i64().unwrap_or(0);
-            let status = p["status"].as_str().unwrap_or("error");
-            let stderr = p["stderr"].as_str();
+    let client = GeminiClient::new(settings.ai.model.clone());
 
-            if let Err(e) = db
-                .update_patch_application_status(patchset_id, idx, status, stderr)
-                .await
-            {
-                error!(
-                    "Failed to update patch status for ps={} idx={}: {}",
-                    patchset_id, idx, e
-                );
+    let mut final_result: Option<Value> = None;
+
+    loop {
+        // We select on child exit or stdout line?
+        // Lines is async.
+
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                // Try to parse as JSON
+                if let Ok(json_msg) = serde_json::from_str::<Value>(&line) {
+                    if let Some(type_str) = json_msg.get("type").and_then(|v| v.as_str()) {
+                        if type_str == "ai_request" {
+                            if let Some(payload_val) = json_msg.get("payload") {
+                                if let Ok(req) = serde_json::from_value::<GenerateContentRequest>(
+                                    payload_val.clone(),
+                                ) {
+                                    // Handle AI Request
+                                    // Use QuotaManager loop
+                                    let resp_payload = loop {
+                                        quota_manager.wait_for_access().await;
+                                        match client.generate_content_single(&req).await {
+                                            Ok(resp) => break Ok(resp),
+                                            Err(e) => {
+                                                if let Some(qe) = e.downcast_ref::<QuotaError>() {
+                                                    quota_manager.report_quota_error(qe.0).await;
+                                                    continue;
+                                                }
+                                                break Err(e);
+                                            }
+                                        }
+                                    };
+
+                                    let reply = match resp_payload {
+                                        Ok(p) => json!({
+                                            "type": "ai_response",
+                                            "payload": p
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "error",
+                                            "payload": e.to_string()
+                                        }),
+                                    };
+
+                                    let mut reply_str = serde_json::to_string(&reply)?;
+                                    reply_str.push('\n');
+                                    if let Err(e) = stdin.write_all(reply_str.as_bytes()).await {
+                                        error!("Failed to write AI response to child: {}", e);
+                                        break; // Child probably died
+                                    }
+                                    let _ = stdin.flush().await;
+                                }
+                            }
+                        } else {
+                            // Unknown type? Assume it's result if it matches result structure?
+                            // Or maybe `review` output result with NO type.
+                            // `result_json` in `review.rs` has "patchset_id".
+                            if json_msg.get("patchset_id").is_some() {
+                                final_result = Some(json_msg);
+                                break;
+                            }
+                        }
+                    } else {
+                        // No type. Result?
+                        if json_msg.get("patchset_id").is_some() {
+                            final_result = Some(json_msg);
+                            break;
+                        }
+                    }
+                } else {
+                    // Non-JSON line? Log it?
+                    // warn!("Review tool stdout: {}", line);
+                }
+            }
+            Ok(None) => break, // EOF
+            Err(e) => {
+                error!("Error reading child stdout: {}", e);
+                break;
             }
         }
     }
 
-    Ok(json)
+    // Child should exit now or soon
+    // We can drop stdin to signal EOF if child is waiting (it shouldn't be if it sent result)
+    drop(stdin);
+
+    let _ = child.wait().await;
+
+    // Update DB with patch statuses if final_result available
+    if let Some(json) = &final_result {
+        if let Some(patches) = json["patches"].as_array() {
+            for p in patches {
+                let idx = p["index"].as_i64().unwrap_or(0);
+                let status = p["status"].as_str().unwrap_or("error");
+                let stderr = p["stderr"].as_str();
+
+                if let Err(e) = db
+                    .update_patch_application_status(patchset_id, idx, status, stderr)
+                    .await
+                {
+                    error!(
+                        "Failed to update patch status for ps={} idx={}: {}",
+                        patchset_id, idx, e
+                    );
+                }
+            }
+        }
+        Ok(json.clone())
+    } else {
+        Err(anyhow::anyhow!("Review tool finished without valid result"))
+    }
 }

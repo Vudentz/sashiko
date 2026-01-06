@@ -177,14 +177,14 @@ impl ToolBox {
         if mode == "smart" {
             let focus = match (start_line, end_line) {
                 (Some(s), Some(e)) => Some(s..e),
-                (Some(s), None) => Some(s..s+1), // Just one line focus if end not specified?
+                (Some(s), None) => Some(s..s + 1), // Just one line focus if end not specified?
                 (None, Some(e)) => Some(1..e),
                 (None, None) => None,
             };
-            
+
             // Allow larger budget for read_file in smart mode
-            let truncated = Truncator::truncate_code(&content, focus, 20_000); 
-            
+            let truncated = Truncator::truncate_code(&content, focus, 20_000);
+
             return Ok(json!({
                 "content": truncated,
                 "total_lines": total_lines,
