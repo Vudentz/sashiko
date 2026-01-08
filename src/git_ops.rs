@@ -373,3 +373,185 @@ pub async fn get_commit_hash(path: &Path, ref_name: &str) -> Result<String> {
         ))
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct GitLogParams {
+    pub repo_path: PathBuf,
+    pub limit: Option<usize>,
+    pub rev_range: Option<String>,
+    pub paths: Vec<String>,
+
+    // Output toggle flags
+    pub show_hash: bool,
+    pub show_author: bool,
+    pub show_date: bool,
+    pub show_subject: bool,
+    pub show_body: bool,
+    pub show_stat: bool,
+}
+
+impl Default for GitLogParams {
+    fn default() -> Self {
+        Self {
+            repo_path: PathBuf::new(),
+            limit: None,
+            rev_range: None,
+            paths: Vec::new(),
+            show_hash: true,
+            show_author: false,
+            show_date: false,
+            show_subject: true,
+            show_body: false,
+            show_stat: false,
+        }
+    }
+}
+
+pub async fn get_git_log(params: GitLogParams) -> Result<String> {
+    let mut args = vec!["log".to_string()];
+
+    // Format string construction
+    let mut format_parts = Vec::new();
+    if params.show_hash {
+        format_parts.push("Hash: %h");
+    }
+    if params.show_author {
+        format_parts.push("Author: %an");
+    }
+    if params.show_date {
+        format_parts.push("Date: %ad");
+        args.push("--date=short".to_string());
+    }
+    if params.show_subject {
+        format_parts.push("Subject: %s");
+    }
+    if params.show_body {
+        format_parts.push("Body:%n%b");
+    }
+
+    let format_string = if format_parts.is_empty() {
+        "%h %s".to_string()
+    } else {
+        format_parts.join("%n") + "%n---"
+    };
+
+    args.push(format!("--pretty=format:{}", format_string));
+
+    if let Some(limit) = params.limit {
+        args.push(format!("-n{}", limit));
+    }
+
+    if params.show_stat {
+        args.push("--stat".to_string());
+    }
+
+    if let Some(range) = &params.rev_range {
+        args.push(range.clone());
+    }
+
+    if !params.paths.is_empty() {
+        args.push("--".to_string());
+        args.extend(params.paths.clone());
+    }
+
+    let output = Command::new("git")
+        .current_dir(&params.repo_path)
+        .args(&args)
+        .output()
+        .await?;
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(anyhow!(
+            "git log failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn test_git_log() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let repo_path = temp_dir.path().to_path_buf();
+
+        // Init git repo
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["init"])
+            .output()
+            .await?;
+
+        // Configure user
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.email", "test@example.com"])
+            .output()
+            .await?;
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["config", "user.name", "Test User"])
+            .output()
+            .await?;
+
+        // Commit 1
+        let file_path = repo_path.join("test.txt");
+        let mut file = File::create(&file_path)?;
+        writeln!(file, "Hello World")?;
+
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["add", "."])
+            .output()
+            .await?;
+
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["commit", "-m", "Initial commit"])
+            .output()
+            .await?;
+
+        // Commit 2
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .append(true)
+            .open(&file_path)?;
+        writeln!(file, "Change 1")?;
+        
+        Command::new("git")
+            .current_dir(&repo_path)
+            .args(["commit", "-am", "Second commit"])
+            .output()
+            .await?;
+
+        // Test get_git_log
+        let params = GitLogParams {
+            repo_path: repo_path.clone(),
+            limit: Some(1),
+            show_subject: true,
+            show_hash: true,
+            ..Default::default()
+        };
+
+        let log = get_git_log(params).await?;
+        assert!(log.contains("Second commit"));
+        assert!(!log.contains("Initial commit")); // Limited to 1
+
+        // Test with author
+        let params = GitLogParams {
+            repo_path: repo_path.clone(),
+            show_author: true,
+            ..Default::default()
+        };
+        let log = get_git_log(params).await?;
+        assert!(log.contains("Author: Test User"));
+
+        Ok(())
+    }
+}
