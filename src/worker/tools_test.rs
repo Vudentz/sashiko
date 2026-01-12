@@ -15,7 +15,7 @@ mod tests {
     #[test]
     fn test_list_dir_linux() {
         let (linux_path, _prompts_path) = get_test_paths();
-        let toolbox = ToolBox::new(linux_path);
+        let toolbox = ToolBox::new(linux_path, None);
         let rt = Runtime::new().unwrap();
 
         let args = json!({ "path": "." });
@@ -29,7 +29,7 @@ mod tests {
     #[test]
     fn test_read_files_linux_readme() {
         let (linux_path, _prompts_path) = get_test_paths();
-        let toolbox = ToolBox::new(linux_path);
+        let toolbox = ToolBox::new(linux_path, None);
         let rt = Runtime::new().unwrap();
 
         let args = json!({
@@ -50,7 +50,7 @@ mod tests {
     #[test]
     fn test_git_show_head() {
         let (linux_path, _prompts_path) = get_test_paths();
-        let toolbox = ToolBox::new(linux_path);
+        let toolbox = ToolBox::new(linux_path, None);
         let rt = Runtime::new().unwrap();
 
         let args = json!({ "object": "HEAD" });
@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn test_git_blame_readme() {
         let (linux_path, _prompts_path) = get_test_paths();
-        let toolbox = ToolBox::new(linux_path);
+        let toolbox = ToolBox::new(linux_path, None);
         let rt = Runtime::new().unwrap();
 
         let args = json!({ "path": "README", "start_line": 1, "end_line": 3 });
@@ -82,7 +82,7 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let worktree_path = temp_dir.path().to_path_buf();
         let _prompts_path = root.join("review-prompts");
-        let toolbox = ToolBox::new(worktree_path.clone());
+        let toolbox = ToolBox::new(worktree_path.clone(), None);
 
         let rt = Runtime::new().unwrap();
 
@@ -100,7 +100,7 @@ mod tests {
     #[test]
     fn test_search_file_content_relative_path() {
         let (linux_path, _prompts_path) = get_test_paths();
-        let toolbox = ToolBox::new(linux_path);
+        let toolbox = ToolBox::new(linux_path, None);
         let rt = Runtime::new().unwrap();
 
         // Search for "Linux kernel" which should be in README
@@ -127,5 +127,36 @@ mod tests {
 
         // Check if README matches are found (it might not be the first match)
         assert!(content.contains("README") || content.contains("./README"));
+    }
+
+    #[test]
+    fn test_read_prompt() {
+        let (linux_path, prompts_path) = get_test_paths();
+        // Enable prompt tool by passing path
+        let toolbox = ToolBox::new(linux_path.clone(), Some(prompts_path.clone()));
+        let rt = Runtime::new().unwrap();
+
+        // Ensure we have a dummy prompt file to read
+        // The real review-prompts might not be populated in test env, check first
+        // Or assume review-core.md exists as per repo structure.
+        // But tests might run in clean env. Let's create a dummy one if we can or check existence.
+        // Since we are running in the actual repo, review-prompts should exist.
+
+        let args = json!({ "name": "review-core.md" });
+        if prompts_path.join("review-core.md").exists() {
+            let result = rt
+                .block_on(toolbox.call("read_prompt", args.clone()))
+                .unwrap();
+            let content = result["content"].as_str().unwrap();
+            assert!(content.contains("Protocol"));
+        } else {
+            // If file doesn't exist (e.g. CI), skip assertion on content but check tool availability
+            println!("Skipping read_prompt content check: review-core.md not found");
+        }
+
+        // Test disabled tool
+        let toolbox_disabled = ToolBox::new(linux_path, None);
+        let result = rt.block_on(toolbox_disabled.call("read_prompt", args));
+        assert!(result.is_err());
     }
 }

@@ -33,6 +33,8 @@ pub struct AiSettings {
     pub max_interactions: usize,
     #[serde(default = "default_temperature")]
     pub temperature: f32,
+    #[serde(default)]
+    pub explicit_prompts_caching: bool,
     #[serde(skip, default)]
     pub no_ai: bool,
 }

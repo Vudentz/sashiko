@@ -162,8 +162,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Budget 300 tokens. 
-        // Full file ~350 tokens. 
+        // Budget 300 tokens.
+        // Full file ~350 tokens.
         // Collapsed (100 lines) ~175 tokens.
         // So 350 > 300 -> Collapses.
         // 175 < 300 -> Returns collapsed content.
@@ -183,9 +183,9 @@ mod tests {
         // 1 <= 1 -> Triggers long line logic.
         let long_line = "a".repeat(1000);
         let truncated = Truncator::truncate_diff(&long_line, 20);
-        
+
         // Should strictly be around max_tokens * 4 + overhead of message
-        assert!(truncated.len() < 300); 
+        assert!(truncated.len() < 300);
         assert!(truncated.contains("Output truncated"));
         assert!(truncated.starts_with("aaaa"));
     }

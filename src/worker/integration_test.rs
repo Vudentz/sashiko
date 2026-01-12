@@ -155,7 +155,7 @@ mod tests {
             &format!("```json\n{}\n```", mock_response),
         )]));
 
-        let tools = ToolBox::new(linux_path);
+        let tools = ToolBox::new(linux_path, None);
         let prompts = PromptRegistry::new(PathBuf::from("review-prompts"));
         let mut worker = Worker::new(client, tools, prompts, 150_000, 25, 1.0, None);
 
@@ -192,7 +192,7 @@ mod tests {
             create_text_response(&format!("```json\n{}\n```", final_response)),
         ]));
 
-        let tools = ToolBox::new(linux_path);
+        let tools = ToolBox::new(linux_path, None);
         let prompts = PromptRegistry::new(PathBuf::from("review-prompts"));
         let mut worker = Worker::new(client, tools, prompts, 150_000, 25, 1.0, None);
 
@@ -255,7 +255,7 @@ mod tests {
             create_tool_call_response("read_files", json!({ "files": [{ "path": "README" }] })),
         ]));
 
-        let tools = ToolBox::new(linux_path);
+        let tools = ToolBox::new(linux_path, None);
         let prompts = PromptRegistry::new(PathBuf::from("review-prompts"));
         let mut worker = Worker::new(client, tools, prompts, 150_000, 25, 1.0, None);
 

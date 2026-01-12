@@ -85,7 +85,7 @@ impl Reviewer {
         // We need tool definitions for the cache.
         // We use dummy paths for ToolBox here because we only need declarations,
         // not execution capability.
-        let tools_def = ToolBox::new(PathBuf::from(".")).get_declarations();
+        let tools_def = ToolBox::new(PathBuf::from("."), None).get_declarations();
 
         let cache_manager = Arc::new(CacheManager::new(
             prompts_dir,
@@ -120,18 +120,22 @@ impl Reviewer {
         }
 
         // Ensure Gemini Cache
-        match self.cache_manager.ensure_cache(None).await {
-            Ok(name) => {
-                info!("Gemini Context Cache initialized: {}", name);
-                let mut guard = self.active_cache_name.lock().await;
-                *guard = Some(name);
+        if self.settings.ai.explicit_prompts_caching {
+            match self.cache_manager.ensure_cache(None).await {
+                Ok(name) => {
+                    info!("Gemini Context Cache initialized: {}", name);
+                    let mut guard = self.active_cache_name.lock().await;
+                    *guard = Some(name);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to initialize Gemini Context Cache: {}. Proceeding without cache (higher cost/latency).",
+                        e
+                    );
+                }
             }
-            Err(e) => {
-                error!(
-                    "Failed to initialize Gemini Context Cache: {}. Proceeding without cache (higher cost/latency).",
-                    e
-                );
-            }
+        } else {
+            info!("Explicit caching disabled via settings.");
         }
 
         let worktree_dir = PathBuf::from(&self.settings.review.worktree_dir);
@@ -721,7 +725,9 @@ async fn run_review_tool(
     }
 
     if let Some(name) = cache_name {
-        cmd.arg("--gemini-cache").arg(name);
+        if settings.ai.explicit_prompts_caching {
+            cmd.arg("--gemini-cache").arg(name);
+        }
     }
 
     cmd.stdin(Stdio::piped());

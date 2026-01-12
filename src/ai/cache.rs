@@ -58,13 +58,16 @@ impl CacheManager {
         let mut valid_candidate = None;
 
         if let Some(ignore) = ignore_cache_name {
-             tracing::info!("EnsureCache: Requested to ignore/delete: '{}'", ignore);
+            tracing::info!("EnsureCache: Requested to ignore/delete: '{}'", ignore);
         } else {
-             tracing::info!("EnsureCache: No ignore target specified.");
+            tracing::info!("EnsureCache: No ignore target specified.");
         }
 
         for cache in existing {
-            let display_name = cache.display_name.as_deref().unwrap_or("<missing_display_name>");
+            let display_name = cache
+                .display_name
+                .as_deref()
+                .unwrap_or("<missing_display_name>");
             let model = &cache.model;
 
             if display_name == &expected_display_name && model == &model_name {
@@ -83,7 +86,7 @@ impl CacheManager {
                     }
 
                     if valid_candidate.is_none() {
-                         valid_candidate = Some(name.clone());
+                        valid_candidate = Some(name.clone());
                     } else {
                         tracing::debug!("Found duplicate valid cache candidate: {}", name);
                     }
@@ -92,7 +95,7 @@ impl CacheManager {
         }
 
         if let Some(name) = valid_candidate {
-             tracing::info!(
+            tracing::info!(
                 "Found existing cache: {} ({} for {})",
                 name,
                 expected_display_name,
@@ -430,10 +433,8 @@ mod tests {
         );
 
         // Call ensure_cache requesting to ignore "cachedContents/bad"
-        let res = manager
-            .ensure_cache(Some("cachedContents/bad"))
-            .await;
-        
+        let res = manager.ensure_cache(Some("cachedContents/bad")).await;
+
         assert!(res.is_ok());
         let found_name = res.unwrap();
 

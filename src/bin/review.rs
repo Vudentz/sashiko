@@ -218,7 +218,14 @@ async fn main() -> Result<()> {
 
             let client = Box::new(sashiko::ai::gemini::StdioGeminiClient);
 
-            let tools = ToolBox::new(worktree.path.clone());
+            // Enable read_prompt tool only if explicit caching is NOT used.
+            let prompts_tool_path = if args.gemini_cache.is_none() {
+                Some(args.prompts.clone())
+            } else {
+                None
+            };
+
+            let tools = ToolBox::new(worktree.path.clone(), prompts_tool_path);
             let prompts = PromptRegistry::new(args.prompts.clone());
             let mut worker = Worker::new(
                 client,

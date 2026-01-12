@@ -66,7 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize tracing with EnvFilter
     // RUST_LOG env var still overrides everything if present
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     fmt().with_env_filter(env_filter).init();
 

@@ -8,132 +8,152 @@ use tokio::process::Command;
 
 pub struct ToolBox {
     worktree_path: PathBuf,
+    prompts_path: Option<PathBuf>,
 }
 
 impl ToolBox {
-    pub fn new(worktree_path: PathBuf) -> Self {
-        Self { worktree_path }
+    pub fn new(worktree_path: PathBuf, prompts_path: Option<PathBuf>) -> Self {
+        Self {
+            worktree_path,
+            prompts_path,
+        }
     }
 
     pub fn get_declarations(&self) -> Tool {
-        Tool {
-            function_declarations: vec![
-                FunctionDeclaration {
-                    name: "read_files".to_string(),
-                    description: "Read the content of one or more files. In 'smart' mode, it collapses irrelevant code around the focus lines."
-                        .to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "files": {
-                                "type": "array",
-                                "description": "List of files to read.",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "path": { "type": "string", "description": "Relative path to the file." },
-                                        "start_line": { "type": "integer", "description": "1-based start line (optional). In smart mode, this is the start of the focus area." },
-                                        "end_line": { "type": "integer", "description": "1-based end line (optional). In smart mode, this is the end of the focus area." }
-                                    },
-                                    "required": ["path"]
-                                }
-                            },
-                            "mode": { "type": "string", "enum": ["raw", "smart"], "description": "Read mode. Defaults to 'raw'." }
+        let mut decls = vec![
+            FunctionDeclaration {
+                name: "read_files".to_string(),
+                description: "Read the content of one or more files. In 'smart' mode, it collapses irrelevant code around the focus lines."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "files": {
+                            "type": "array",
+                            "description": "List of files to read.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": { "type": "string", "description": "Relative path to the file." },
+                                    "start_line": { "type": "integer", "description": "1-based start line (optional). In smart mode, this is the start of the focus area." },
+                                    "end_line": { "type": "integer", "description": "1-based end line (optional). In smart mode, this is the end of the focus area." }
+                                },
+                                "required": ["path"]
+                            }
                         },
-                        "required": ["files"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "git_blame".to_string(),
-                    description: "Show what revision and author last modified each line of a file."
-                        .to_string(),
-                    parameters: json!({
+                        "mode": { "type": "string", "enum": ["raw", "smart"], "description": "Read mode. Defaults to 'raw'." }
+                    },
+                    "required": ["files"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "git_blame".to_string(),
+                description: "Show what revision and author last modified each line of a file."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative path to the file." },
+                        "start_line": { "type": "integer", "description": "1-based start line (optional)." },
+                        "end_line": { "type": "integer", "description": "1-based end line (optional)." }
+                    },
+                    "required": ["path"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "git_diff".to_string(),
+                description: "Show changes between commits, commit and working tree, etc."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments for git diff (e.g., ['HEAD^', 'HEAD'])." }
+                    },
+                    "required": ["args"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "git_show".to_string(),
+                description: "Show various types of objects (blobs, trees, tags and commits). Supports line filtering for blobs and diff suppression for commits."
+                    .to_string(),
+                parameters: json!({
                         "type": "object",
                         "properties": {
-                            "path": { "type": "string", "description": "Relative path to the file." },
-                            "start_line": { "type": "integer", "description": "1-based start line (optional)." },
+                            "object": { "type": "string", "description": "The object to show (e.g. 'HEAD:README.md' or 'HEAD')." },
+                            "suppress_diff": { "type": "boolean", "description": "If true, suppresses the diff output for commits (shows only metadata). Useful for checking commit details cheaply." },
+                            "start_line": { "type": "integer", "description": "1-based start line (optional). Useful for reading specific parts of a file (blob)." },
                             "end_line": { "type": "integer", "description": "1-based end line (optional)." }
                         },
-                        "required": ["path"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "git_diff".to_string(),
-                    description: "Show changes between commits, commit and working tree, etc."
-                        .to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments for git diff (e.g., ['HEAD^', 'HEAD'])." }
-                        },
-                        "required": ["args"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "git_show".to_string(),
-                    description: "Show various types of objects (blobs, trees, tags and commits). Supports line filtering for blobs and diff suppression for commits."
-                        .to_string(),
-                    parameters: json!({
-                         "type": "object",
-                         "properties": {
-                             "object": { "type": "string", "description": "The object to show (e.g. 'HEAD:README.md' or 'HEAD')." },
-                             "suppress_diff": { "type": "boolean", "description": "If true, suppresses the diff output for commits (shows only metadata). Useful for checking commit details cheaply." },
-                             "start_line": { "type": "integer", "description": "1-based start line (optional). Useful for reading specific parts of a file (blob)." },
-                             "end_line": { "type": "integer", "description": "1-based end line (optional)." }
-                         },
-                         "required": ["object"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "list_dir".to_string(),
-                    description: "List files in a directory.".to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "path": { "type": "string", "description": "Directory path." }
-                        },
-                        "required": ["path"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "write_file".to_string(),
-                    description: "Write content to a file in the worktree. Primarily used for 'review-inline.txt'."
-                        .to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "path": { "type": "string", "description": "Relative path to the file (e.g., 'review-inline.txt')." },
-                            "content": { "type": "string", "description": "Content to write." }
-                        },
-                        "required": ["path", "content"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "search_file_content".to_string(),
-                    description: "Search for a pattern in files using grep. Returns matching lines with context.".to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": { "type": "string", "description": "Regex pattern to search for." },
-                            "path": { "type": "string", "description": "Directory to search in (defaults to root)." },
-                            "context_lines": { "type": "integer", "description": "Number of context lines to show (default 0)." }
-                        },
-                        "required": ["pattern"]
-                    }),
-                },
-                FunctionDeclaration {
-                    name: "find_files".to_string(),
-                    description: "Find files matching a glob pattern (e.g., '*.rs', 'src/**/mod.rs').".to_string(),
-                    parameters: json!({
-                        "type": "object",
-                        "properties": {
-                            "pattern": { "type": "string", "description": "Glob pattern to match." },
-                            "path": { "type": "string", "description": "Directory to search in (defaults to root)." }
-                        },
-                        "required": ["pattern"]
-                    }),
-                },
-            ],
+                        "required": ["object"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "list_dir".to_string(),
+                description: "List files in a directory.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Directory path." }
+                    },
+                    "required": ["path"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "write_file".to_string(),
+                description: "Write content to a file in the worktree. Primarily used for 'review-inline.txt'."
+                    .to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string", "description": "Relative path to the file (e.g., 'review-inline.txt')." },
+                        "content": { "type": "string", "description": "Content to write." }
+                    },
+                    "required": ["path", "content"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "search_file_content".to_string(),
+                description: "Search for a pattern in files using grep. Returns matching lines with context.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Regex pattern to search for." },
+                        "path": { "type": "string", "description": "Directory to search in (defaults to root)." },
+                        "context_lines": { "type": "integer", "description": "Number of context lines to show (default 0)." }
+                    },
+                    "required": ["pattern"]
+                }),
+            },
+            FunctionDeclaration {
+                name: "find_files".to_string(),
+                description: "Find files matching a glob pattern (e.g., '*.rs', 'src/**/mod.rs').".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string", "description": "Glob pattern to match." },
+                        "path": { "type": "string", "description": "Directory to search in (defaults to root)." }
+                    },
+                    "required": ["pattern"]
+                }),
+            },
+        ];
+
+        if self.prompts_path.is_some() {
+            decls.push(FunctionDeclaration {
+                name: "read_prompt".to_string(),
+                description: "Read a specific prompt file from the prompt registry (e.g., 'mm.md', 'patterns/guarded-access.md').".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string", "description": "Name of the prompt file relative to review-prompts directory." }
+                    },
+                    "required": ["name"]
+                }),
+            });
+        }
+
+        Tool {
+            function_declarations: decls,
         }
     }
 
@@ -147,14 +167,28 @@ impl ToolBox {
             "list_dir" => self.list_dir(args).await,
             "search_file_content" => self.search_file_content(args).await,
             "find_files" => self.find_files(args).await,
+            "read_prompt" => self.read_prompt(args).await,
             _ => Err(anyhow!("Unknown tool: {}", name)),
         }
     }
 
     fn truncate_output(&self, output: String) -> String {
-        // Use Truncator's diff logic which is essentially head/tail truncation.
-        // 10k tokens ~ 40k chars.
         Truncator::truncate_diff(&output, 10_000)
+    }
+
+    async fn read_prompt(&self, args: Value) -> Result<Value> {
+        let prompts_path = self
+            .prompts_path
+            .as_ref()
+            .ok_or_else(|| anyhow!("read_prompt tool is not available"))?;
+        let name = args["name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing prompt name"))?;
+
+        let path = self.validate_path(name, prompts_path)?;
+        let content = fs::read_to_string(path).await?;
+
+        Ok(json!({ "content": content }))
     }
 
     async fn read_files(&self, args: Value) -> Result<Value> {
@@ -213,12 +247,11 @@ impl ToolBox {
         if mode == "smart" {
             let focus = match (start_line, end_line) {
                 (Some(s), Some(e)) => Some(s..e),
-                (Some(s), None) => Some(s..s + 1), // Just one line focus if end not specified?
+                (Some(s), None) => Some(s..s + 1),
                 (None, Some(e)) => Some(1..e),
                 (None, None) => None,
             };
 
-            // Allow larger budget for read_file in smart mode
             let truncated = Truncator::truncate_code(&content, focus, 20_000);
 
             return Ok(json!({
@@ -228,7 +261,6 @@ impl ToolBox {
             }));
         }
 
-        // Raw mode (legacy behavior)
         let (start, end) = match (start_line, end_line) {
             (Some(s), Some(e)) => (s.max(1) - 1, e.min(total_lines)),
             (Some(s), None) => (s.max(1) - 1, total_lines),
@@ -320,7 +352,6 @@ impl ToolBox {
         }
 
         let content = String::from_utf8_lossy(&output.stdout).to_string();
-        // Use truncate_diff specifically
         Ok(json!({ "content": Truncator::truncate_diff(&content, 10_000) }))
     }
 
@@ -352,7 +383,6 @@ impl ToolBox {
 
         let content = String::from_utf8_lossy(&output.stdout).to_string();
 
-        // Handle line slicing if requested
         if start_line.is_some() || end_line.is_some() {
             let lines: Vec<&str> = content.lines().collect();
             let total_lines = lines.len();
@@ -398,22 +428,14 @@ impl ToolBox {
             entries.push(json!({ "name": entry.file_name().to_string_lossy(), "type": ty }));
         }
 
-        // List dir can also be huge if directory has many files, but usually JSON structure overhead is the issue.
-        // We probably don't need to truncate list_dir unless it's thousands of files.
-        // But for safety, let's limit the number of entries if needed, or just let it be.
-        // 32KB text limit for file content is reasonable.
-        // For list_dir, we can limit entries count.
         if entries.len() > 1000 {
             entries.truncate(1000);
-            // We can't easily signal truncation in JSON array without changing structure or adding a dummy entry.
-            // Let's leave list_dir as is for now, it's less likely to produce GBs than git show.
         }
 
         Ok(json!({ "entries": entries }))
     }
 
     fn validate_path(&self, relative: &str, base: &Path) -> Result<PathBuf> {
-        // Simple security check: prevent traversal out of base
         if relative.contains("..") || relative.starts_with("/") {
             return Err(anyhow!("Invalid path: {}", relative));
         }
@@ -431,12 +453,11 @@ impl ToolBox {
         let path_str = args["path"].as_str().unwrap_or(".");
         let context_lines = args["context_lines"].as_u64().unwrap_or(0);
 
-        // Validate path security but use relative path for grep to ensure clean output
         let _ = self.validate_path(path_str, &self.worktree_path)?;
 
         let mut cmd = Command::new("grep");
         cmd.current_dir(&self.worktree_path)
-            .arg("-rnI") // Recursive, line numbers, skip binary
+            .arg("-rnI")
             .arg(format!("-C{}", context_lines))
             .arg(pattern);
 
@@ -446,7 +467,6 @@ impl ToolBox {
 
         let output = cmd.output().await?;
 
-        // grep returns exit code 1 if no matches found, which is not an error for us
         if !output.status.success() && output.status.code() != Some(1) {
             return Err(anyhow!(
                 "grep failed: {}",
@@ -470,7 +490,6 @@ impl ToolBox {
 
         let path = self.validate_path(path_str, &self.worktree_path)?;
 
-        // Using 'find' command
         let output = Command::new("find")
             .current_dir(&self.worktree_path)
             .arg(path)
@@ -478,7 +497,7 @@ impl ToolBox {
             .arg(pattern)
             .arg("-not")
             .arg("-path")
-            .arg("*/.*") // Ignore hidden files/dirs like .git
+            .arg("*/.*")
             .output()
             .await?;
 
@@ -492,7 +511,6 @@ impl ToolBox {
         let content = String::from_utf8_lossy(&output.stdout).to_string();
         let files: Vec<&str> = content.lines().collect();
 
-        // Limit results
         if files.len() > 1000 {
             let truncated = files[..1000].join("\n");
             return Ok(json!({
