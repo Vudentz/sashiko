@@ -842,7 +842,24 @@ async fn run_review_tool(
                                 {
                                     // Handle Cached AI Request
                                     let mut current_req = req;
-                                    let resp_payload = loop {
+                                    let mut updated_cache_name: Option<String> = None;
+
+                                    // Check if we have a newer cache name and update the request if needed
+                                    {
+                                        let guard = active_cache_name.lock().await;
+                                        if let Some(active_name) = guard.as_ref() {
+                                            if &current_req.cached_content != active_name {
+                                                info!(
+                                                    "Updating stale cache name in request: {} -> {}",
+                                                    current_req.cached_content, active_name
+                                                );
+                                                current_req.cached_content = active_name.clone();
+                                                updated_cache_name = Some(active_name.clone());
+                                            }
+                                        }
+                                    }
+
+                                    let mut resp_payload = loop {
                                         quota_manager.wait_for_access().await;
                                         match client.generate_content_with_cache_single(&current_req).await
                                         {
@@ -863,6 +880,7 @@ async fn run_review_tool(
                                                                 Ok(new_name) => {
                                                                     info!("Refreshed cache: {}", new_name);
                                                                     current_req.cached_content = new_name.clone();
+                                                                    updated_cache_name = Some(new_name.clone());
                                                                     let mut guard = active_cache_name.lock().await;
                                                                     *guard = Some(new_name);
                                                                     continue;
@@ -880,6 +898,20 @@ async fn run_review_tool(
                                             }
                                         }
                                     };
+
+                                    // Inject new cache name into response metadata if updated
+                                    if let Some(new_name) = updated_cache_name {
+                                        if let Ok(resp) = resp_payload.as_mut() {
+                                            let usage = resp.usage_metadata.get_or_insert_with(|| crate::ai::gemini::UsageMetadata {
+                                                prompt_token_count: 0,
+                                                candidates_token_count: None,
+                                                total_token_count: 0,
+                                                extra: Some(std::collections::HashMap::new()),
+                                            });
+                                            let extra = usage.extra.get_or_insert_with(std::collections::HashMap::new);
+                                            extra.insert("new_cache_name".to_string(), serde_json::Value::String(new_name));
+                                        }
+                                    }
 
                                     let reply = match resp_payload {
                                         Ok(p) => json!({ "type": "ai_response", "payload": p }),

@@ -216,7 +216,22 @@ impl Worker {
                     generation_config,
                 };
                 info!("Sending request to Gemini (cached: {})...", cache_name);
-                self.client.generate_content_with_cache(req).await?
+                let resp = self.client.generate_content_with_cache(req).await?;
+
+                // Check for cache update from parent
+                if let Some(usage) = &resp.usage_metadata {
+                    if let Some(extra) = &usage.extra {
+                        if let Some(new_name) = extra.get("new_cache_name").and_then(|v| v.as_str())
+                        {
+                            info!(
+                                "Updating cache name from response: {} -> {}",
+                                cache_name, new_name
+                            );
+                            self.cache_name = Some(new_name.to_string());
+                        }
+                    }
+                }
+                resp
             } else {
                 let req = GenerateContentRequest {
                     contents: self.history.clone(),

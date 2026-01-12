@@ -55,34 +55,50 @@ impl CacheManager {
 
         // List existing caches
         let existing = self.client.list_cached_contents().await?;
+        let mut valid_candidate = None;
+
+        if let Some(ignore) = ignore_cache_name {
+             tracing::info!("EnsureCache: Requested to ignore/delete: '{}'", ignore);
+        } else {
+             tracing::info!("EnsureCache: No ignore target specified.");
+        }
 
         for cache in existing {
-            if let Some(dn) = &cache.display_name {
-                if dn == &expected_display_name && cache.model == model_name {
-                    if let Some(name) = cache.name {
-                        if let Some(ignore) = ignore_cache_name {
-                            if name == ignore {
-                                tracing::warn!(
-                                    "Deleting/Ignoring cache {} as requested (likely invalid/expired)",
-                                    name
-                                );
-                                if let Err(e) = self.client.delete_cached_content(&name).await {
-                                    tracing::warn!("Failed to delete ignored cache {}: {}", name, e);
-                                }
-                                continue;
-                            }
-                        }
+            let display_name = cache.display_name.as_deref().unwrap_or("<missing_display_name>");
+            let model = &cache.model;
 
-                        tracing::info!(
-                            "Found existing cache: {} ({} for {})",
-                            name,
-                            expected_display_name,
-                            model_name
-                        );
-                        return Ok(name);
+            if display_name == &expected_display_name && model == &model_name {
+                if let Some(name) = cache.name {
+                    if let Some(ignore) = ignore_cache_name {
+                        if name == ignore {
+                            tracing::warn!(
+                                "Deleting/Ignoring cache '{}' (MATCHED ignore target)",
+                                name
+                            );
+                            if let Err(e) = self.client.delete_cached_content(&name).await {
+                                tracing::warn!("Failed to delete ignored cache {}: {}", name, e);
+                            }
+                            continue;
+                        }
+                    }
+
+                    if valid_candidate.is_none() {
+                         valid_candidate = Some(name.clone());
+                    } else {
+                        tracing::debug!("Found duplicate valid cache candidate: {}", name);
                     }
                 }
             }
+        }
+
+        if let Some(name) = valid_candidate {
+             tracing::info!(
+                "Found existing cache: {} ({} for {})",
+                name,
+                expected_display_name,
+                model_name
+            );
+            return Ok(name);
         }
 
         tracing::info!("Creating new cache: {}", expected_display_name);
@@ -314,5 +330,119 @@ mod tests {
             .expect("create_cached_content SHOULD be called when model mismatches");
 
         assert_eq!(request.model, "models/gemini-right");
+    }
+
+    struct MockGenAiClientWithMultiple {
+        existing: Vec<CachedContent>,
+        deleted: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl GenAiClient for MockGenAiClientWithMultiple {
+        async fn generate_content(
+            &self,
+            _request: GenerateContentRequest,
+        ) -> Result<GenerateContentResponse> {
+            unimplemented!()
+        }
+
+        async fn create_cached_content(
+            &self,
+            _request: CreateCachedContentRequest,
+        ) -> Result<CachedContent> {
+            unimplemented!("Should not be called if valid cache exists")
+        }
+
+        async fn list_cached_contents(&self) -> Result<Vec<CachedContent>> {
+            Ok(self.existing.clone())
+        }
+
+        async fn delete_cached_content(&self, name: &str) -> Result<()> {
+            self.deleted.lock().unwrap().push(name.to_string());
+            Ok(())
+        }
+
+        async fn generate_content_with_cache(
+            &self,
+            _request: GenerateContentWithCacheRequest,
+        ) -> Result<GenerateContentResponse> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ensure_cache_deletes_ignored_and_finds_valid() {
+        use sha2::{Digest, Sha256};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let base_dir = temp_dir.path().to_path_buf();
+
+        // Calculate expected display name
+        // Must match PromptRegistry::build_context for empty dir
+        let context_str = format!(
+            "{}\n\n# review-code.md\n\n# Subsystem Guidelines\n\n",
+            crate::worker::prompts::SYSTEM_IDENTITY
+        );
+        let mut hasher = Sha256::new();
+        hasher.update(&context_str);
+        let hash = format!("{:x}", hasher.finalize());
+        let short_hash = &hash[..8];
+        let expected_dn = format!("sashiko-reviewer-v1-{}", short_hash);
+
+        let ignored_cache = CachedContent {
+            name: Some("cachedContents/bad".to_string()),
+            display_name: Some(expected_dn.clone()),
+            model: "models/gemini-test".to_string(),
+            system_instruction: None,
+            contents: None,
+            tools: None,
+            create_time: None,
+            update_time: None,
+            expire_time: None,
+            ttl: None,
+        };
+
+        let valid_cache = CachedContent {
+            name: Some("cachedContents/good".to_string()),
+            display_name: Some(expected_dn.clone()),
+            model: "models/gemini-test".to_string(),
+            system_instruction: None,
+            contents: None,
+            tools: None,
+            create_time: None,
+            update_time: None,
+            expire_time: None,
+            ttl: None,
+        };
+
+        let deleted_tracker = Arc::new(Mutex::new(Vec::new()));
+        let mock_client = MockGenAiClientWithMultiple {
+            existing: vec![ignored_cache.clone(), valid_cache.clone()],
+            deleted: deleted_tracker.clone(),
+        };
+
+        let manager = CacheManager::new(
+            base_dir,
+            Box::new(mock_client),
+            "gemini-test".to_string(),
+            "60s".to_string(),
+            None,
+        );
+
+        // Call ensure_cache requesting to ignore "cachedContents/bad"
+        let res = manager
+            .ensure_cache(Some("cachedContents/bad"))
+            .await;
+        
+        assert!(res.is_ok());
+        let found_name = res.unwrap();
+
+        // Should return the valid one
+        assert_eq!(found_name, "cachedContents/good");
+
+        // Should have deleted the bad one
+        let deleted = deleted_tracker.lock().unwrap();
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0], "cachedContents/bad");
     }
 }
