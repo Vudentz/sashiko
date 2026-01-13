@@ -33,6 +33,7 @@ pub struct PatchsetRow {
     pub findings_medium: Option<i64>,
     pub findings_high: Option<i64>,
     pub findings_critical: Option<i64>,
+    pub baseline_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize)]
@@ -291,7 +292,7 @@ impl Database {
             .try_add_column("reviews", "inline_review", "TEXT")
             .await;
         let _ = self
-            .try_add_column("ai_interactions", "tokens_cached", "INTEGER")
+            .try_add_column("patchsets", "baseline_id", "INTEGER")
             .await;
 
         let _ = self
@@ -676,7 +677,7 @@ impl Database {
         FROM reviews r
         LEFT JOIN ai_interactions ai ON r.interaction_id = ai.id
         GROUP BY r.provider, r.model_name, r.status";
-        
+
         let mut rows = self.conn.query(sql, ()).await?;
         let mut stats = Vec::new();
         while let Ok(Some(row)) = rows.next().await {
@@ -1154,6 +1155,21 @@ impl Database {
         }
     }
 
+    pub async fn get_baseline_commit(&self, id: i64) -> Result<Option<String>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT last_known_commit FROM baselines WHERE id = ?",
+                libsql::params![id],
+            )
+            .await?;
+        if let Ok(Some(row)) = rows.next().await {
+            Ok(row.get(0).ok())
+        } else {
+            Ok(None)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn create_patchset(
         &self,
@@ -1168,6 +1184,7 @@ impl Database {
         cc: &str,
         version: Option<u32>,
         part_index: u32,
+        baseline_id: Option<i64>,
     ) -> Result<Option<i64>> {
         // Find candidate patchsets in this thread
         let mut rows = self
@@ -1330,6 +1347,15 @@ impl Database {
                 libsql::params![author, total_parts, parser_version, to, cc, target_id],
             ).await?;
 
+            if let Some(bid) = baseline_id {
+                self.conn
+                    .execute(
+                        "UPDATE patchsets SET baseline_id = ? WHERE id = ?",
+                        libsql::params![bid, target_id],
+                    )
+                    .await?;
+            }
+
             // Conditionally update subject
             // Note: We check against the best index found among all merged sets OR the new part_index
             if part_index < current_subject_index {
@@ -1375,9 +1401,9 @@ impl Database {
         // No match found, create new patchset
         self.conn
             .execute(
-                "INSERT INTO patchsets (thread_id, cover_letter_message_id, subject, author, date, total_parts, received_parts, status, parser_version, to_recipients, cc_recipients, subject_index) 
-                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Incomplete', ?, ?, ?, ?)",
-                libsql::params![thread_id, cover_letter_message_id, subject, author, date, total_parts, parser_version, to, cc, part_index],
+                "INSERT INTO patchsets (thread_id, cover_letter_message_id, subject, author, date, total_parts, received_parts, status, parser_version, to_recipients, cc_recipients, subject_index, baseline_id) 
+                 VALUES (?, ?, ?, ?, ?, ?, 0, 'Incomplete', ?, ?, ?, ?, ?)",
+                libsql::params![thread_id, cover_letter_message_id, subject, author, date, total_parts, parser_version, to, cc, part_index, baseline_id],
             )
             .await?;
 
@@ -1583,6 +1609,7 @@ impl Database {
                 findings_medium: row.get(11).ok(),
                 findings_high: row.get(12).ok(),
                 findings_critical: row.get(13).ok(),
+                baseline_id: None, // We don't fetch it in this query yet, or we can add it. For now None is safe.
             });
         }
         Ok(patchsets)
@@ -1889,7 +1916,7 @@ impl Database {
 
     pub async fn get_pending_patchsets(&self, limit: usize) -> Result<Vec<PatchsetRow>> {
         let mut rows = self.conn.query(
-            "SELECT id, subject, status, thread_id, author, date, cover_letter_message_id, total_parts, received_parts 
+            "SELECT id, subject, status, thread_id, author, date, cover_letter_message_id, total_parts, received_parts, baseline_id 
              FROM patchsets WHERE status = 'Pending' ORDER BY date ASC LIMIT ?",
             libsql::params![limit as i64],
         ).await?;
@@ -1911,6 +1938,7 @@ impl Database {
                 findings_medium: None,
                 findings_high: None,
                 findings_critical: None,
+                baseline_id: row.get(9).ok(),
             });
         }
         Ok(patchsets)

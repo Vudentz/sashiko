@@ -70,7 +70,7 @@ impl CacheManager {
                 .unwrap_or("<missing_display_name>");
             let model = &cache.model;
 
-            if display_name == &expected_display_name && model == &model_name {
+            if display_name == expected_display_name && model == &model_name {
                 if let Some(name) = cache.name {
                     if let Some(ignore) = ignore_cache_name {
                         if name == ignore {

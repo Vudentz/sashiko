@@ -20,9 +20,11 @@ pub struct Ingestor {
     nntp_enabled: bool,
     message_id: Option<String>,
     patchset_id: Option<String>,
+    baseline: Option<String>,
 }
 
 impl Ingestor {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         settings: Settings,
         db: Arc<Database>,
@@ -31,6 +33,7 @@ impl Ingestor {
         nntp_enabled: bool,
         message_id: Option<String>,
         patchset_id: Option<String>,
+        baseline: Option<String>,
     ) -> Self {
         Self {
             settings,
@@ -40,6 +43,7 @@ impl Ingestor {
             nntp_enabled,
             message_id,
             patchset_id,
+            baseline,
         }
     }
 
@@ -100,7 +104,7 @@ impl Ingestor {
 
         let content = output.stdout;
         if content.is_empty() {
-             return Err(anyhow!("Empty response from {}", url));
+            return Err(anyhow!("Empty response from {}", url));
         }
 
         // We use "manual" as group name for manually ingested messages
@@ -110,6 +114,7 @@ impl Ingestor {
                 article_id: msg_id.to_string(),
                 content: Vec::new(),
                 raw: Some(content),
+                baseline: self.baseline.clone(),
             })
             .await?;
 
@@ -131,7 +136,10 @@ impl Ingestor {
             .kill_on_drop(true);
 
         let mut child = curl_cmd.spawn()?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to open stdout"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdout"))?;
         let mut reader = BufReader::new(stdout);
 
         let mut current_email = Vec::new();
@@ -172,10 +180,13 @@ impl Ingestor {
 
         let status = child.wait().await?;
         if !status.success() {
-             warn!("curl/gunzip process exited with error");
+            warn!("curl/gunzip process exited with error");
         }
 
-        info!("Successfully ingested {} messages from patchset {}", count, msg_id);
+        info!(
+            "Successfully ingested {} messages from patchset {}",
+            count, msg_id
+        );
         Ok(())
     }
 
@@ -189,11 +200,14 @@ impl Ingestor {
         let msg_id = raw_str
             .lines()
             .find(|l| l.to_lowercase().starts_with("message-id:"))
-            .map(|l| l.trim_start_matches(|c| c != '<').trim_end_matches(|c| c != '>'))
+            .map(|l| {
+                l.trim_start_matches(|c| c != '<')
+                    .trim_end_matches(|c| c != '>')
+            })
             .unwrap_or("unknown")
             .trim_matches(|c| c == '<' || c == '>') // Remove brackets if present
             .to_string();
-        
+
         // Skip if empty (e.g. mbox artifacts)
         if raw_bytes.iter().all(|b| b.is_ascii_whitespace()) {
             return Ok(());
@@ -205,6 +219,7 @@ impl Ingestor {
                 article_id: msg_id,
                 content: Vec::new(),
                 raw: Some(raw_bytes.to_vec()),
+                baseline: self.baseline.clone(),
             })
             .await?;
         Ok(())
@@ -461,6 +476,7 @@ impl Ingestor {
                                 article_id: next_id.to_string(),
                                 content: lines,
                                 raw: None,
+                                baseline: None,
                             })
                             .await?;
                         self.db.update_last_article_num(group_name, next_id).await?;
@@ -582,6 +598,7 @@ impl Ingestor {
                         article_id: hash.to_string(),
                         content: Vec::new(),
                         raw: Some(content),
+                        baseline: None,
                     })
                     .await?;
 

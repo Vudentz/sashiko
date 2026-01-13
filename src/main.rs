@@ -36,6 +36,11 @@ struct Cli {
     #[arg(long)]
     patchset: Option<String>,
 
+    /// Git baseline for the specific patch or patchset (e.g. commit hash)
+    /// Only valid with --message or --patchset
+    #[arg(long)]
+    baseline: Option<String>,
+
     /// Enable debug logging (overrides settings)
     #[arg(long)]
     debug: bool,
@@ -100,6 +105,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("AI interactions disabled via --no-ai flag");
     }
 
+    if cli.baseline.is_some() && cli.message.is_none() && cli.patchset.is_none() {
+        error!("--baseline can only be used with --message or --patchset");
+        return Err("Invalid argument combination".into());
+    }
+
     if let Some(port) = cli.port {
         settings.server.port = port;
         info!("Server port overridden via --port flag: {}", port);
@@ -137,18 +147,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _permit = permit; // Hold permit until task completion
 
                 // Extract raw bytes
-                let (group, article_id, raw_bytes) = match event {
+                let (group, article_id, raw_bytes, baseline) = match event {
                     Event::ArticleFetched {
                         group,
                         article_id,
                         content,
                         raw,
+                        baseline,
                     } => {
                         let bytes = match raw {
                             Some(b) => b,
                             None => content.join("\n").into_bytes(),
                         };
-                        (group, article_id, bytes)
+                        (group, article_id, bytes, baseline)
                     }
                 };
 
@@ -165,6 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 article_id,
                                 metadata,
                                 patch: patch_opt,
+                                baseline,
                             })
                             .await
                         {
@@ -244,6 +256,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cli.nntp,
         cli.message,
         cli.patchset,
+        cli.baseline,
     );
     tokio::spawn(async move {
         if let Err(e) = ingestor.run().await {
@@ -284,8 +297,22 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
         article_id,
         metadata,
         patch,
+        baseline,
     } = article;
     let patch_opt = patch;
+
+    // Resolve baseline ID if provided
+    let baseline_id = if let Some(b) = baseline {
+        match worker_db.create_baseline(None, None, Some(&b)).await {
+            Ok(id) => Some(id),
+            Err(e) => {
+                error!("Failed to create baseline for {}: {}", b, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // 1. Thread Resolution
     let thread_id = if let Some(ref reply_to) = metadata.in_reply_to {
@@ -402,6 +429,7 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
                 &metadata.cc,
                 metadata.version,
                 metadata.index,
+                baseline_id,
             )
             .await
         {

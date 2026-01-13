@@ -8,6 +8,7 @@ pub enum Event {
         article_id: String,
         content: Vec<String>,
         raw: Option<Vec<u8>>,
+        baseline: Option<String>,
     },
 }
 
@@ -17,4 +18,5 @@ pub struct ParsedArticle {
     pub article_id: String,
     pub metadata: PatchsetMetadata,
     pub patch: Option<Patch>,
+    pub baseline: Option<String>,
 }

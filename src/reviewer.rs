@@ -271,9 +271,21 @@ impl Reviewer {
         };
 
         let subject = patchset.subject.clone().unwrap_or("Unknown".to_string());
-        let candidates =
+        let candidates = if let Some(bid) = patchset.baseline_id {
+            if let Ok(Some(commit)) = ctx.db.get_baseline_commit(bid).await {
+                info!(
+                    "Using forced baseline commit {} from ingestion for patchset {}",
+                    commit, patchset_id
+                );
+                vec![BaselineResolution::Commit(commit)]
+            } else {
+                ctx.baseline_registry
+                    .resolve_candidates(&all_files, &subject, body.as_deref())
+            }
+        } else {
             ctx.baseline_registry
-                .resolve_candidates(&all_files, &subject, body.as_deref());
+                .resolve_candidates(&all_files, &subject, body.as_deref())
+        };
 
         let mut review_success = false;
         let mut any_patch_failed_to_apply = false;

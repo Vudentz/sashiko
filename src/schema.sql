@@ -55,8 +55,10 @@ CREATE TABLE IF NOT EXISTS patchsets (
     parser_version INTEGER DEFAULT 0,
     to_recipients TEXT,
     cc_recipients TEXT,
+    baseline_id INTEGER,
     FOREIGN KEY(thread_id) REFERENCES threads(id),
-    FOREIGN KEY(cover_letter_message_id) REFERENCES messages(message_id)
+    FOREIGN KEY(cover_letter_message_id) REFERENCES messages(message_id),
+    FOREIGN KEY(baseline_id) REFERENCES baselines(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_patchsets_status ON patchsets(status);
