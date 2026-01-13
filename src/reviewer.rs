@@ -799,6 +799,9 @@ async fn run_review_tool(
         &settings.review.worktree_dir,
     ]);
 
+    cmd.env("NO_COLOR", "1");
+    cmd.env("SASHIKO_LOG_PLAIN", "1");
+
     if let Some(idx) = review_index {
         cmd.arg("--review-patch-index").arg(idx.to_string());
     }

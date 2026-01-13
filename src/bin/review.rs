@@ -57,9 +57,19 @@ struct ReviewInput {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
+    let no_color = std::env::var("NO_COLOR").is_ok();
+    let plain_logs = std::env::var("SASHIKO_LOG_PLAIN").is_ok();
+
+    let builder = tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .init();
+        .with_ansi(!no_color);
+
+    if plain_logs {
+        builder.without_time().init();
+    } else {
+        builder.init();
+    }
+
     let args = Args::parse();
     let settings = Settings::new().unwrap();
 
