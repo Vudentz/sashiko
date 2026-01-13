@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS reviews (
     FOREIGN KEY(baseline_id) REFERENCES baselines(id)
 );
 
+-- Deprecated: comments table was never really used, replaced by findings
 CREATE TABLE IF NOT EXISTS comments (
     id INTEGER PRIMARY KEY,
     review_id INTEGER NOT NULL,
@@ -103,6 +104,19 @@ CREATE TABLE IF NOT EXISTS comments (
     severity TEXT, -- Info, Warning, Error
     FOREIGN KEY(review_id) REFERENCES reviews(id)
 );
+
+CREATE TABLE IF NOT EXISTS findings (
+    id INTEGER PRIMARY KEY,
+    review_id INTEGER NOT NULL,
+    file_path TEXT,
+    line_number INTEGER,
+    severity INTEGER NOT NULL, -- 1: Low, 2: Medium, 3: High, 4: Critical
+    message TEXT,
+    suggestion TEXT,
+    FOREIGN KEY(review_id) REFERENCES reviews(id)
+);
+CREATE INDEX IF NOT EXISTS idx_findings_review_id ON findings(review_id);
+CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
 
 CREATE TABLE IF NOT EXISTS ai_interactions (
     id TEXT PRIMARY KEY,

@@ -5,7 +5,7 @@ use crate::ai::gemini::{
 };
 use crate::ai::proxy::QuotaManager;
 use crate::baseline::{BaselineRegistry, BaselineResolution, extract_files_from_diff};
-use crate::db::{AiInteractionParams, Database, PatchsetRow, ToolUsage};
+use crate::db::{AiInteractionParams, Database, PatchsetRow, ToolUsage, Finding, Severity};
 use crate::git_ops::{ensure_remote, get_commit_hash};
 use crate::settings::Settings;
 use anyhow::Result;
@@ -558,6 +558,28 @@ impl Reviewer {
                                             as u32,
                                     })
                                     .await;
+
+                                // Parse and save findings
+                                if let Some(findings_arr) = review_content.get("findings").and_then(|f| f.as_array()) {
+                                    for f in findings_arr {
+                                        let file_path = f["file"].as_str().unwrap_or("unknown").to_string();
+                                        let line_number = f["line"].as_i64().unwrap_or(0);
+                                        let severity_str = f["severity"].as_str().unwrap_or("Low");
+                                        let message = f["message"].as_str().unwrap_or("").to_string();
+                                        let suggestion = f["suggestion"].as_str().map(|s| s.to_string());
+
+                                        let severity = Severity::from_str(severity_str);
+
+                                        let _ = ctx.db.create_finding(Finding {
+                                            review_id,
+                                            file_path,
+                                            line_number,
+                                            severity,
+                                            message,
+                                            suggestion,
+                                        }).await;
+                                    }
+                                }
 
                                 let summary = review_content["summary"]
                                     .as_str()

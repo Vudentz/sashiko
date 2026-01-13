@@ -76,6 +76,7 @@ pub struct AiInteractionParams<'a> {
     pub tokens_cached: u32,
 }
 
+#[derive(Debug, Serialize)]
 pub struct ToolUsage {
     pub review_id: i64,
     pub provider: String,
@@ -83,6 +84,38 @@ pub struct ToolUsage {
     pub tool_name: String,
     pub arguments: Option<String>,
     pub output_length: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    Low = 1,
+    Medium = 2,
+    High = 3,
+    Critical = 4,
+}
+
+impl Severity {
+    pub fn from_str(s: &str) -> Self {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("critical") {
+            Severity::Critical
+        } else if s.to_lowercase().starts_with("high") {
+            Severity::High
+        } else if s.to_lowercase().starts_with("medium") {
+            Severity::Medium
+        } else {
+            Severity::Low
+        }
+    }
+}
+
+pub struct Finding {
+    pub review_id: i64,
+    pub file_path: String,
+    pub line_number: i64,
+    pub severity: Severity,
+    pub message: String,
+    pub suggestion: Option<String>,
 }
 
 impl Database {
@@ -526,6 +559,76 @@ impl Database {
             }
         }
         info!("Migration: verified tool usages.");
+        let _ = self.migrate_findings().await;
+        Ok(())
+    }
+
+    pub async fn create_finding(&self, finding: Finding) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO findings (review_id, file_path, line_number, severity, message, suggestion)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            libsql::params![
+                finding.review_id,
+                finding.file_path,
+                finding.line_number,
+                finding.severity as i32,
+                finding.message,
+                finding.suggestion,
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    pub async fn migrate_findings(&self) -> Result<()> {
+        info!("Migration: Checking for findings to backfill...");
+        // Select reviews that have AI output but maybe no findings in the new table
+        let sql = "SELECT r.id, ai.output_raw 
+                   FROM reviews r 
+                   JOIN ai_interactions ai ON r.interaction_id = ai.id
+                   WHERE r.status = 'Reviewed'";
+        
+        let mut rows = self.conn.query(sql, ()).await?;
+        
+        while let Ok(Some(row)) = rows.next().await {
+            let review_id: i64 = row.get(0)?;
+            let output_raw: String = row.get(1)?;
+            
+            // Check if we already have findings for this review
+            let count_check = self.conn.query("SELECT count(*) FROM findings WHERE review_id = ?", libsql::params![review_id]).await;
+            if let Ok(mut c_rows) = count_check {
+                if let Ok(Some(c_row)) = c_rows.next().await {
+                    let count: i64 = c_row.get(0)?;
+                    if count > 0 {
+                        continue;
+                    }
+                }
+            }
+            
+            // Parse JSON and insert findings
+            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&output_raw) {
+                if let Some(findings_arr) = json_val.get("findings").and_then(|f| f.as_array()) {
+                    for f in findings_arr {
+                        let file_path = f["file"].as_str().unwrap_or("unknown").to_string();
+                        let line_number = f["line"].as_i64().unwrap_or(0);
+                        let severity_str = f["severity"].as_str().unwrap_or("Low");
+                        let message = f["message"].as_str().unwrap_or("").to_string();
+                        let suggestion = f["suggestion"].as_str().map(|s| s.to_string());
+                        
+                        let severity = Severity::from_str(severity_str);
+                        
+                        let _ = self.create_finding(Finding {
+                            review_id,
+                            file_path,
+                            line_number,
+                            severity,
+                            message,
+                            suggestion,
+                        }).await;
+                    }
+                }
+            }
+        }
+        info!("Migration: verified findings.");
         Ok(())
     }
 
@@ -620,19 +723,18 @@ impl Database {
         let mut findings_data = Vec::new();
         if let Some(sid) = subsystem_id {
             let sql = "SELECT 
-                strftime('%Y-%m-%d', ai.created_at, 'unixepoch') as day,
-                CASE 
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'low%' THEN 'low'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'medium%' THEN 'medium'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'high%' THEN 'high'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'critical%' THEN 'critical'
-                    ELSE lower(json_extract(value, '$.severity'))
+                strftime('%Y-%m-%d', r.created_at, 'unixepoch') as day,
+                CASE f.severity 
+                    WHEN 1 THEN 'low' 
+                    WHEN 2 THEN 'medium' 
+                    WHEN 3 THEN 'high' 
+                    WHEN 4 THEN 'critical' 
+                    ELSE 'unknown' 
                 END as severity,
                 COUNT(*) as count
-            FROM ai_interactions ai
-            JOIN reviews r ON ai.id = r.interaction_id
+            FROM findings f
+            JOIN reviews r ON f.review_id = r.id
             JOIN patchsets_subsystems ps ON r.patchset_id = ps.patchset_id
-            , json_each(ai.output_raw, '$.findings')
             WHERE ps.subsystem_id = ?
             GROUP BY day, severity
             ORDER BY day";
@@ -646,17 +748,17 @@ impl Database {
             }
         } else {
             let sql = "SELECT 
-                strftime('%Y-%m-%d', ai.created_at, 'unixepoch') as day,
-                CASE 
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'low%' THEN 'low'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'medium%' THEN 'medium'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'high%' THEN 'high'
-                    WHEN lower(json_extract(value, '$.severity')) LIKE 'critical%' THEN 'critical'
-                    ELSE lower(json_extract(value, '$.severity'))
+                strftime('%Y-%m-%d', r.created_at, 'unixepoch') as day,
+                CASE f.severity 
+                    WHEN 1 THEN 'low' 
+                    WHEN 2 THEN 'medium' 
+                    WHEN 3 THEN 'high' 
+                    WHEN 4 THEN 'critical' 
+                    ELSE 'unknown' 
                 END as severity,
                 COUNT(*) as count
-            FROM ai_interactions ai
-            , json_each(ai.output_raw, '$.findings')
+            FROM findings f
+            JOIN reviews r ON f.review_id = r.id
             GROUP BY day, severity
             ORDER BY day";
             let mut rows = self.conn.query(sql, ()).await?;
@@ -1570,13 +1672,12 @@ impl Database {
              LEFT JOIN subsystems s ON ps.subsystem_id = s.id
              LEFT JOIN (
                 SELECT r.patchset_id,
-                    SUM(CASE WHEN lower(json_extract(value, '$.severity')) LIKE 'low%' THEN 1 ELSE 0 END) as low,
-                    SUM(CASE WHEN lower(json_extract(value, '$.severity')) LIKE 'medium%' THEN 1 ELSE 0 END) as medium,
-                    SUM(CASE WHEN lower(json_extract(value, '$.severity')) LIKE 'high%' THEN 1 ELSE 0 END) as high,
-                    SUM(CASE WHEN lower(json_extract(value, '$.severity')) LIKE 'critical%' THEN 1 ELSE 0 END) as critical
-                FROM reviews r 
-                JOIN ai_interactions ai ON r.interaction_id = ai.id
-                , json_each(ai.output_raw, '$.findings')
+                    SUM(CASE WHEN f.severity = 1 THEN 1 ELSE 0 END) as low,
+                    SUM(CASE WHEN f.severity = 2 THEN 1 ELSE 0 END) as medium,
+                    SUM(CASE WHEN f.severity = 3 THEN 1 ELSE 0 END) as high,
+                    SUM(CASE WHEN f.severity = 4 THEN 1 ELSE 0 END) as critical
+                FROM reviews r
+                JOIN findings f ON r.id = f.review_id
                 GROUP BY r.patchset_id
              ) f ON p.id = f.patchset_id
              {} 
