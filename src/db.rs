@@ -1381,11 +1381,8 @@ impl Database {
             .await?;
 
         let mut matches = Vec::new();
-        let mut has_existing_patchsets = false;
-        let mut author_exists_in_thread = false;
 
         while let Ok(Some(row)) = rows.next().await {
-            has_existing_patchsets = true;
             let id: i64 = row.get(0)?;
             let existing_date: i64 = row.get(1)?;
             let existing_author: String = row.get(2)?;
@@ -1393,25 +1390,16 @@ impl Database {
             let existing_subject_index: u32 = row.get(4).unwrap_or(9999);
             let existing_total: u32 = row.get(5).unwrap_or(1);
 
-            if existing_author == author {
-                author_exists_in_thread = true;
-            }
-
             // Parse version from existing subject
             let existing_version = crate::patch::parse_subject_version(&existing_subject);
 
             // Matching logic:
-            // 1. Author must match
+            // 1. Author matches OR it's a multi-part series with matching total_parts (trusting thread context)
             // 2. Time must be close (within 24 hours / 86400s)
             // 3. Total parts must match
             // 4. Versions must match OR one is unspecified (None)
             // 5. For singletons (total=1), Subject must match (fuzzy) to avoid merging unrelated patches
-            //    unless one is a cover letter (index=0) and other is patch (index=1) - but singletons don't have covers usually.
-            //    Actually, [PATCH] A and [PATCH] B should not merge.
-            //    [PATCH] A and [PATCH] A (resend) should merge.
-            //    So for total_parts=1, we require subject equality (ignoring prefixes handled by parser, but we have raw subjects here).
-            //    Let's check if subjects are "similar" or just enforce strictness for total=1.
-
+            
             let versions_compatible = match (version, existing_version) {
                 (Some(a), Some(b)) => a == b,
                 _ => true,
@@ -1419,15 +1407,6 @@ impl Database {
 
             let is_singleton = total_parts == 1;
             // For singletons, we require the subject to be somewhat similar to avoid merging unrelated patches.
-            // Simple check: strict equality of the non-prefix part?
-            // Or just: if total=1, don't merge if received_parts >= 1 (already full)?
-            // But what if it's a resend?
-            // Safer: For total=1, require subject match.
-            // But subjects might differ slightly "Fix A" vs "Fix A v2".
-            // We stripped versions.
-            // Let's rely on: if total=1, we match ONLY if subject is similar.
-            // Since we don't have fuzzy match handy, let's use:
-            // If total=1, assume disjoint unless subjects are identical (simplified).
             let subject_match = if is_singleton {
                 if subject == existing_subject {
                     true
@@ -1440,7 +1419,11 @@ impl Database {
                 true // For series, we rely on 1/N, 2/N pattern and author/time.
             };
 
-            if existing_author == author
+            // Relaxed author check: if it's a series (total > 1) and counts match in the same thread,
+            // we assume it's the same series even if author differs (e.g. git ingest range, or co-authors).
+            let author_or_series_match = existing_author == author || (total_parts > 1 && total_parts == existing_total);
+
+            if author_or_series_match
                 && (date - existing_date).abs() < 86400
                 && versions_compatible
                 && total_parts == existing_total
@@ -1448,15 +1431,6 @@ impl Database {
             {
                 matches.push((id, existing_subject_index));
             }
-        }
-
-        // Enforce Same Sender constraint
-        if has_existing_patchsets && !author_exists_in_thread {
-            info!(
-                "Skipping patchset creation for thread {} author '{}': different from existing patchset authors",
-                thread_id, author
-            );
-            return Ok(None);
         }
 
         if !matches.is_empty() {
@@ -2313,6 +2287,7 @@ mod tests {
         assert_eq!(list[0].subject.as_deref(), Some("Cover Letter"));
 
         // 4. Create NEW patchset in same thread (Author B, Time 1000 - same time but diff author)
+        // With relaxed logic, this SHOULD merge if total_parts match (assuming same series).
         let ps3 = db
             .create_patchset(
                 thread_id,
@@ -2330,7 +2305,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(ps3.is_none());
+        assert_eq!(ps3, ps1, "Different author in same series should merge");
 
         // 5. Create NEW patchset v2 (Author A, Time 1002 - close time, but v2)
         // Under new logic "Implicit matches Explicit", this SHOULD merge with ps1 (Implicit)
