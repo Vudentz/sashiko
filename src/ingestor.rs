@@ -322,7 +322,7 @@ impl Ingestor {
             reader,
             baseline,
             &format!("git range {}", range),
-            "git-import",
+            &format!("git-import:{}", range),
         )
         .await?;
 

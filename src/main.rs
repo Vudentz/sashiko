@@ -344,12 +344,25 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
     };
 
     // 1. Thread Resolution
-    let thread_id = if let Some(ref reply_to) = metadata.in_reply_to {
+    let (thread_id, is_git_import) = if let Some(range) = group.strip_prefix("git-import:") {
+        let safe_range = range.replace(['/', ':', ' ', '.'], "_");
+        let root_msg_id = format!("git-import-{}@sashiko.local", safe_range);
+        match worker_db
+            .ensure_thread_for_message(&root_msg_id, metadata.date)
+            .await
+        {
+            Ok(tid) => (tid, true),
+            Err(e) => {
+                error!("Failed to ensure thread for git import {}: {}", range, e);
+                return ProcessStatus::Error;
+            }
+        }
+    } else if let Some(ref reply_to) = metadata.in_reply_to {
         match worker_db
             .ensure_thread_for_message(reply_to, metadata.date)
             .await
         {
-            Ok(tid) => tid,
+            Ok(tid) => (tid, false),
             Err(e) => {
                 error!("Failed to ensure thread for parent {}: {}", reply_to, e);
                 return ProcessStatus::Error;
@@ -360,7 +373,7 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
             .ensure_thread_for_message(&metadata.message_id, metadata.date)
             .await
         {
-            Ok(tid) => tid,
+            Ok(tid) => (tid, false),
             Err(e) => {
                 error!(
                     "Failed to ensure thread for self {}: {}",
@@ -401,7 +414,7 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
 
     // Subsystem Identification and Linking
     let mut subsystems = identify_subsystems(&metadata.to, &metadata.cc);
-    if group == "git-import" {
+    if group.starts_with("git-import") {
         subsystems.push(("from git".to_string(), "git-import".to_string()));
     }
 
@@ -449,15 +462,33 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
     };
 
     if metadata.is_patch_or_cover {
-        let strict_author = group != "git-import";
+        let (subject, author, total_parts, strict_author) = if is_git_import {
+            (
+                format!(
+                    "Git Import: {}",
+                    group.strip_prefix("git-import:").unwrap_or("unknown")
+                ),
+                "Sashiko Git Import".to_string(),
+                999999,
+                false,
+            )
+        } else {
+            (
+                metadata.subject.clone(),
+                metadata.author.clone(),
+                metadata.total,
+                !group.starts_with("git-import"),
+            )
+        };
+
         match worker_db
             .create_patchset(
                 thread_id,
                 cover_letter_id,
-                &metadata.subject,
-                &metadata.author,
+                &subject,
+                &author,
                 metadata.date,
-                metadata.total,
+                total_parts,
                 PARSER_VERSION,
                 &metadata.to,
                 &metadata.cc,
