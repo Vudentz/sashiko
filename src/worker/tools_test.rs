@@ -86,7 +86,7 @@ mod tests {
 
         let rt = Runtime::new().unwrap();
 
-        let filename = "test-write.txt";
+        let filename = "review-inline.txt";
         let content = "Hello, world!";
         let args = json!({ "path": filename, "content": content });
 
@@ -95,6 +95,23 @@ mod tests {
 
         let written_content = std::fs::read_to_string(worktree_path.join(filename)).unwrap();
         assert_eq!(written_content, content);
+    }
+
+    #[test]
+    fn test_write_file_forbidden() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let worktree_path = temp_dir.path().to_path_buf();
+        let toolbox = ToolBox::new(worktree_path, None);
+
+        let rt = Runtime::new().unwrap();
+
+        let filename = "forbidden.txt";
+        let content = "This should fail";
+        let args = json!({ "path": filename, "content": content });
+
+        let result = rt.block_on(toolbox.call("write_file", args));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Permission denied"));
     }
 
     #[test]

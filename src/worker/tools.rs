@@ -289,6 +289,13 @@ impl ToolBox {
         let path_str = args["path"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing path"))?;
+
+        if path_str != "review-metadata.json" && path_str != "review-inline.txt" {
+            return Err(anyhow!(
+                "Permission denied: Only 'review-metadata.json' and 'review-inline.txt' can be written."
+            ));
+        }
+
         let content = args["content"]
             .as_str()
             .ok_or_else(|| anyhow!("Missing content"))?;
