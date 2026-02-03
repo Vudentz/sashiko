@@ -19,6 +19,11 @@ async fn test_merge_different_versions_should_fail() {
     // 1. Create Thread
     let t1 = db.create_thread("root1", "Subject", 1000).await.unwrap();
 
+    // Create messages
+    db.create_message("msg1", t1, None, "Author", "[PATCH] Fix something", 1000, "body", "", "", None, None).await.unwrap();
+    db.create_message("msg2", t1, None, "Author", "[PATCH v2] Fix something", 1010, "body", "", "", None, None).await.unwrap();
+
+
     // 2. Create Patchset v1 (Implicit)
     // [PATCH] Fix something
     // version: None
@@ -42,6 +47,8 @@ async fn test_merge_different_versions_should_fail() {
         .await
         .unwrap()
         .unwrap();
+
+    let _ = db.create_patch(ps1, "msg1", 1, "diff").await.unwrap();
 
     // 3. Create Patchset v2 (Explicit)
     // [PATCH v2] Fix something
@@ -145,6 +152,9 @@ async fn test_merge_different_versions_series_should_fail() {
         .await
         .unwrap();
 
+    db.create_message("msg5", t1, None, "Author", "[PATCH 1/2] Fix something", 3000, "body", "", "", None, None).await.unwrap();
+    db.create_message("msg6", t1, None, "Author", "[PATCH v2 1/2] Fix something", 3010, "body", "", "", None, None).await.unwrap();
+
     // 2. Create Patchset v1 (Implicit) - Part 1/2
     // [PATCH 1/2] Fix something
     let ps1 = db
@@ -167,6 +177,8 @@ async fn test_merge_different_versions_series_should_fail() {
         .await
         .unwrap()
         .unwrap();
+
+    let _ = db.create_patch(ps1, "msg5", 1, "diff").await.unwrap();
 
     // 3. Create Patchset v2 (Explicit) - Part 1/2
     // [PATCH v2 1/2] Fix something

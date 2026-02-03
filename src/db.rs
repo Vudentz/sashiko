@@ -1686,7 +1686,7 @@ impl Database {
 
             if author_or_series_match
                 && (!strict_author || (date - existing_date).abs() < 86400)
-                && versions_compatible
+                && (versions_compatible || same_thread)
                 && total_parts == existing_total
                 && subject_match
                 && prefix_match
@@ -2969,7 +2969,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_implicit_version_mismatch_no_merge() {
+    async fn test_implicit_version_mismatch_should_merge() {
         let db = setup_db().await;
         let thread_id = db
             .create_thread("root_v6", "Version 6 Series", 30000)
@@ -3055,10 +3055,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // With strict checking, this MUST NOT merge.
-        assert_ne!(
+        // Relaxed checking: Should merge because same thread
+        assert_eq!(
             ps_cover, ps_p1,
-            "Should NOT merge explicit v6 cover with implicit v1 patch"
+            "Should merge explicit v6 cover with implicit v1 patch if in same thread"
         );
     }
 
@@ -3285,6 +3285,9 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        
+        // Add patch to trigger index collision logic
+        db.create_patch(ps_v5, "msg_v5", 1, "diff").await.unwrap();
 
         // v6 (Close time)
         db.create_message(
