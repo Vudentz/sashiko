@@ -748,7 +748,7 @@
         // =====================================================================
         // UTILITIES
         // =====================================================================
-        function escapeHtml(text, highlightDiff = false) {
+        function escapeHtml(text, highlightDiff = false, renderAiComments = false) {
             if (!text) return '';
             const escaped = String(text)
                 .replace(/&/g, "&amp;")
@@ -779,22 +779,21 @@
                                      content.startsWith('--- ') || 
                                      content.startsWith('+++ ') || 
                                      content.startsWith('@@ ');
+
+                    const isExtendedHeader = /^(new|old|deleted) file mode|similarity index|copy (from|to)|rename (from|to)/.test(content);
                     
-                    if (isHeader || isQuoted) {
+                    if (isHeader || isExtendedHeader || isQuoted) {
                         seenDiffOrQuote = true;
                     }
 
                     const isMeta = content.match(/^(commit [0-9a-f]+|Author:|Date:|Subject:|From:|To:|Cc:|Signed-off-by:)/i);
-                    const isSkip = /^\s*\[\s*\.\.\.\s*\]\s*$/.test(content);
 
                     let type = 'TEXT'; // Default to comment candidate
                     let isDefiniteDiff = false;
 
-                    if (isHeader) {
+                    if (isHeader || isExtendedHeader) {
                         isDefiniteDiff = true;
                         inDiffBlock = true;
-                    } else if (isSkip) {
-                        isDefiniteDiff = true;
                     } else if (hasQuotes) {
                         if (isQuoted) {
                             isDefiniteDiff = true;
@@ -823,7 +822,7 @@
                     if (isHeader) cls += ' diff-header';
                     else if (isDefiniteDiff) {
                          if (content.startsWith('+') && !content.startsWith('+++')) cls += ' diff-added';
-                         else if (content.startsWith('-') && !content.startsWith('---')) cls += ' diff-removed';
+                         else if (content.startsWith('-') && !content.startsWith('---') && content.trim() !== '--') cls += ' diff-removed';
                     }
 
                     return { line, type, cls };
@@ -846,7 +845,7 @@
                             const highlightBuffer = (lastType === 'TEXT' && item.type === 'TEXT');
                             buffer.forEach(b => {
                                 let c = b.cls;
-                                if (highlightBuffer) c += ' ai-comment';
+                                if (highlightBuffer && renderAiComments) c += ' ai-comment';
                                 resultHtml += `<div class="${c}">${b.line}</div>`;
                             });
                             buffer = [];
@@ -854,7 +853,7 @@
                         
                         // Output current
                         let c = item.cls;
-                        if (item.type === 'TEXT') c += ' ai-comment';
+                        if (item.type === 'TEXT' && renderAiComments) c += ' ai-comment';
                         resultHtml += `<div class="${c}">${item.line}</div>`;
                         
                         lastType = item.type;
@@ -1476,7 +1475,7 @@
                         <button class="toggle-btn" onclick="toggleCollapsible('inline-${uniqueId}', this)">${icon} Inline Review</button>
                         <div id="inline-${uniqueId}" class="collapsible ${isOpen}" style="position: relative;">
                             <button class="copy-btn" style="position: absolute; top: 5px; right: 5px; z-index: 10;" onclick="copyToClipboard(this.nextElementSibling.innerText)">Copy</button>
-                            <div class="log-inline-block">${escapeHtml(r.inline_review, true)}</div>
+                            <div class="log-inline-block">${escapeHtml(r.inline_review, true, true)}</div>
                         </div>
                     </div>
                 `;
@@ -1576,7 +1575,7 @@
                 
                 ${threadHtml ? `<div class="section"><h2>Thread</h2>${threadHtml}</div>` : ''}
                 
-                <pre class="body">${escapeHtml(`Subject: ${data.subject || '(no subject)'}\n\n${data.body || '(no body)'}`, true)}</pre>
+                <pre class="body">${escapeHtml(`Subject: ${data.subject || '(no subject)'}\n\n${data.body || '(no body)'}`, true, false)}</pre>
             `;
         }
 
