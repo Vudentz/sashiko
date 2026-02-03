@@ -955,6 +955,49 @@ impl Database {
         Ok(())
     }
 
+    // People & Recipients
+    pub async fn ensure_person(&self, name: Option<&str>, email: &str) -> Result<i64> {
+        let email = email.trim();
+        // Try to insert
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO people (name, email) VALUES (?, ?)",
+                libsql::params![name, email],
+            )
+            .await?;
+
+        // If we provided a name and the existing record has no name, update it?
+        // For now, keep it simple. Just get ID.
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id FROM people WHERE email = ?",
+                libsql::params![email],
+            )
+            .await?;
+
+        if let Ok(Some(row)) = rows.next().await {
+            Ok(row.get(0)?)
+        } else {
+            Err(anyhow::anyhow!("Failed to ensure person: {}", email))
+        }
+    }
+
+    pub async fn add_message_recipient(
+        &self,
+        message_id: i64,
+        person_id: i64,
+        recipient_type: &str,
+    ) -> Result<()> {
+        self.conn
+            .execute(
+                "INSERT OR IGNORE INTO messages_recipients (message_id, person_id, recipient_type) VALUES (?, ?, ?)",
+                libsql::params![message_id, person_id, recipient_type],
+            )
+            .await?;
+        Ok(())
+    }
+
     // Subsystems
     pub async fn ensure_subsystem(&self, name: &str, mailing_list_address: &str) -> Result<i64> {
         // Try to insert

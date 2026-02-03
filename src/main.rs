@@ -559,6 +559,7 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
         .get_message_id_by_msg_id(&metadata.message_id)
         .await
     {
+        // Link Subsystems
         for &sid in &subsystem_ids {
             if let Err(e) = worker_db.add_subsystem_to_message(msg_id_db, sid).await {
                 error!("Failed to link message to subsystem: {}", e);
@@ -567,6 +568,10 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
                 error!("Failed to link thread to subsystem: {}", e);
             }
         }
+
+        // Link Recipients
+        process_recipients(worker_db, msg_id_db, &metadata.to, "To").await;
+        process_recipients(worker_db, msg_id_db, &metadata.cc, "Cc").await;
     }
 
     // Removed baseline detection from ingestion as it's now part of review process
@@ -685,6 +690,58 @@ async fn process_parsed_article(worker_db: &Database, article: ParsedArticle) ->
         // Skipped patchset creation/update for non-patch message
         // BUT message was ingested successfully.
         ProcessStatus::Ingested
+    }
+}
+
+async fn process_recipients(db: &Database, message_id: i64, recipients: &str, recipient_type: &str) {
+    for raw in recipients.split(',') {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+
+        let (name, email) = if let Some(start) = raw.find('<') {
+            if let Some(end) = raw.find('>') {
+                if end > start {
+                    let name = raw[..start].trim();
+                    let email = &raw[start + 1..end];
+                    (
+                        if name.is_empty() { None } else { Some(name) },
+                        email.trim(),
+                    )
+                } else {
+                    (None, raw)
+                }
+            } else {
+                (None, raw)
+            }
+        } else {
+            (None, raw)
+        };
+
+        if email.is_empty() {
+            continue;
+        }
+
+        match db.ensure_person(name, email).await {
+            Ok(person_id) => {
+                if let Err(e) = db
+                    .add_message_recipient(message_id, person_id, recipient_type)
+                    .await
+                {
+                    // Ignore duplicates
+                    if !e.to_string().contains("UNIQUE constraint failed") {
+                         error!(
+                            "Failed to add recipient {} to message {}: {}",
+                            email, message_id, e
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to ensure person {}: {}", email, e);
+            }
+        }
     }
 }
 

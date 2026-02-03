@@ -202,6 +202,25 @@ CREATE TABLE IF NOT EXISTS patchsets_tags (
 );
 CREATE INDEX IF NOT EXISTS idx_patchsets_cover_message_id ON patchsets(cover_letter_message_id);
 
+CREATE INDEX IF NOT EXISTS idx_messages_thread_id ON messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_patches_patchset_id ON patches(patchset_id);
+CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(date);
+
+CREATE TABLE IF NOT EXISTS people (
+    id INTEGER PRIMARY KEY,
+    name TEXT,
+    email TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS messages_recipients (
+    message_id INTEGER NOT NULL,
+    person_id INTEGER NOT NULL,
+    recipient_type TEXT NOT NULL, -- 'To', 'Cc'
+    PRIMARY KEY (message_id, person_id),
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE,
+    FOREIGN KEY(person_id) REFERENCES people(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS tool_usages (
     id INTEGER PRIMARY KEY,
     review_id INTEGER NOT NULL,
