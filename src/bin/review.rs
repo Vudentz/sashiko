@@ -104,13 +104,14 @@ async fn main() -> Result<()> {
 
     let baseline_arg = args.baseline.unwrap_or_else(|| "HEAD".to_string());
     let repo_path = PathBuf::from(&settings.git.repository_path);
-    
+
     info!("Resolving baseline: {}", baseline_arg);
     let baseline_sha = sashiko::git_ops::get_commit_hash(&repo_path, &baseline_arg).await?;
     info!("Using baseline: {} ({})", baseline_arg, baseline_sha);
 
     // Use provided or default baseline
-    let worktree = GitWorktree::new(&repo_path, &baseline_sha, args.worktree_dir.as_deref()).await?;
+    let worktree =
+        GitWorktree::new(&repo_path, &baseline_sha, args.worktree_dir.as_deref()).await?;
 
     info!("Created worktree at {:?}", worktree.path);
     info!("Found {} patches total", patches.len());
@@ -120,24 +121,28 @@ async fn main() -> Result<()> {
     let mut patch_shows = std::collections::HashMap::new();
 
     // 1. Apply ALL patches to validate the series
-    info!("Applying all {} patches to validate series...", patches.len());
+    info!(
+        "Applying all {} patches to validate series...",
+        patches.len()
+    );
     let mut all_applied = true;
 
     for p in &patches {
         info!("Applying patch part {}", p.index);
-        
+
         let success = apply_single_patch(
-            &worktree, 
-            p, 
-            &mut patch_shas, 
-            &mut patch_shows, 
-            &mut patch_results
-        ).await;
+            &worktree,
+            p,
+            &mut patch_shas,
+            &mut patch_shows,
+            &mut patch_results,
+        )
+        .await;
 
         if !success {
             all_applied = false;
             // We continue applying to see other failures, or stop?
-            // Usually git am aborts on first failure. 
+            // Usually git am aborts on first failure.
             // But we are simulating application. If one fails, subsequent ones likely fail.
             // But let's let the loop continue to fill results for attempted patches.
             // If git am failed, worktree might be in bad state for next apply?
@@ -164,14 +169,17 @@ async fn main() -> Result<()> {
             // But if target_idx is last, we already have the state.
             // Optimization: Only reset if target_idx < max_index
             let max_index = patches.iter().map(|p| p.index).max().unwrap_or(0);
-            
+
             if target_idx < max_index {
-                info!("Resetting worktree to baseline to prepare context for patch {}...", target_idx);
+                info!(
+                    "Resetting worktree to baseline to prepare context for patch {}...",
+                    target_idx
+                );
                 if let Err(e) = worktree.reset_hard(&baseline_sha).await {
-                     error!("Failed to reset worktree: {}", e);
-                     // If reset fails, we can't proceed safely.
-                     // Report error.
-                     let result_json = json!({
+                    error!("Failed to reset worktree: {}", e);
+                    // If reset fails, we can't proceed safely.
+                    // Report error.
+                    let result_json = json!({
                         "patchset_id": patchset_id,
                         "baseline": baseline_arg,
                         "patches": patch_results,
@@ -186,17 +194,19 @@ async fn main() -> Result<()> {
                 let mut dummy_results = Vec::new();
                 let mut dummy_shas = std::collections::HashMap::new();
                 let mut dummy_shows = std::collections::HashMap::new();
-                
-                let patches_subset: Vec<&PatchInput> = patches.iter().filter(|p| p.index <= target_idx).collect();
+
+                let patches_subset: Vec<&PatchInput> =
+                    patches.iter().filter(|p| p.index <= target_idx).collect();
                 for p in patches_subset {
                     let success = apply_single_patch(
-                        &worktree, 
-                        p, 
-                        &mut dummy_shas, 
-                        &mut dummy_shows, 
-                        &mut dummy_results
-                    ).await;
-                    
+                        &worktree,
+                        p,
+                        &mut dummy_shas,
+                        &mut dummy_shows,
+                        &mut dummy_results,
+                    )
+                    .await;
+
                     if !success {
                         // exquisite failure: worked first time, failed second?
                         error!("Patch {} failed to apply on second pass!", p.index);
@@ -397,8 +407,7 @@ async fn apply_single_patch(
             Ok(_) => {
                 applied_via_am = true;
                 success = true;
-                if let Ok(sha) = sashiko::git_ops::get_commit_hash(&worktree.path, "HEAD").await
-                {
+                if let Ok(sha) = sashiko::git_ops::get_commit_hash(&worktree.path, "HEAD").await {
                     patch_shas.insert(p.index, sha.clone());
                     if let Ok(show) = worktree.get_commit_show(&sha).await {
                         patch_shows.insert(p.index, show);
@@ -455,6 +464,6 @@ async fn apply_single_patch(
             }
         }
     }
-    
+
     success
 }

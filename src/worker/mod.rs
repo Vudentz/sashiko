@@ -137,7 +137,7 @@ impl Worker {
             let removed_idx = 1;
             let _removed = self.history.remove(removed_idx);
             let removed_tokens = self.history_tokens.remove(removed_idx);
-            
+
             current_tokens = current_tokens.saturating_sub(removed_tokens);
             debug!(
                 "Pruned message with {} tokens. New total: {}",
@@ -214,7 +214,8 @@ impl Worker {
                 thought_signature: None,
             }],
         };
-        self.history_tokens.push(self.estimate_content_tokens(&initial_content));
+        self.history_tokens
+            .push(self.estimate_content_tokens(&initial_content));
         self.history.push(initial_content);
 
         let mut turns = 0;
@@ -371,7 +372,8 @@ impl Worker {
             };
 
             let content = &candidate.content;
-            self.history_tokens.push(self.estimate_content_tokens(content));
+            self.history_tokens
+                .push(self.estimate_content_tokens(content));
             self.history.push(content.clone());
 
             // Check for function calls
@@ -461,7 +463,8 @@ impl Worker {
                     role: "function".to_string(),
                     parts: function_responses,
                 };
-                self.history_tokens.push(self.estimate_content_tokens(&response_content));
+                self.history_tokens
+                    .push(self.estimate_content_tokens(&response_content));
                 self.history.push(response_content);
                 // Continue loop to get model response to tool outputs
             } else {

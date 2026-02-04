@@ -173,7 +173,7 @@ impl GitWorktree {
                 String::from_utf8_lossy(&output.stderr)
             ));
         }
-        
+
         // Also clean untracked files to be safe
         let clean_output = Command::new("git")
             .current_dir(&self.path)
@@ -182,7 +182,7 @@ impl GitWorktree {
             .await?;
 
         if !clean_output.status.success() {
-             return Err(anyhow!(
+            return Err(anyhow!(
                 "git clean failed: {}",
                 String::from_utf8_lossy(&clean_output.stderr)
             ));
