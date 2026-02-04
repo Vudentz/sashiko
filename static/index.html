@@ -786,7 +786,7 @@
                         seenDiffOrQuote = true;
                     }
 
-                    const isMeta = content.match(/^(commit [0-9a-f]+|Author:|Date:|Subject:|From:|To:|Cc:|Signed-off-by:)/i);
+                    const isMeta = content.match(/^(commit [0-9a-f]+|Author:|Date:|Subject:|From:|To:|Cc:|Signed-off-by:)/i) && !renderAiComments;
 
                     let type = 'TEXT'; // Default to comment candidate
                     let isDefiniteDiff = false;
