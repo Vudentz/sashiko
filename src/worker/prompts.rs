@@ -21,8 +21,24 @@ use tokio::fs;
 pub const SYSTEM_IDENTITY: &str = "You're an expert Linux kernel developer and upstream maintainer with deep knowledge of Linux kernel, Operating Systems, CPU architectures, modern hardware and Linux kernel community standards and processes.";
 
 pub const TASK_INSTRUCTION: &str = "Run a deep dive regression analysis of the top commit in the Linux source tree.\n\n\
-Follow the Review Protocol and all Technical patterns and Subsystem Guidelines available in your context.\n\
-The inline-review.txt *MUST* follow the format and guidelines provided in the '## inline-template.md' section above.";
+Follow the Review Protocol and all Technical patterns and Subsystem Guidelines available in your context.\n\n\
+You must produce the following outputs:\n\
+1. 'review-inline.txt': If you have ANY findings (count > 0), regardless of severity. This file *MUST* follow the format and guidelines provided in the '## inline-template.md' section.\n\
+2. Final JSON Output: Your final response must be a valid JSON object strictly following the schema below. \
+Ignore any previous instructions to generate a separate 'review-metadata.json' file; only provide this JSON in your final response.\n\n\
+JSON Output Schema:\n\
+{\n\
+  \"findings\": [\n\
+    {\n\
+      \"file\": \"path/to/file\",\n\
+      \"line\": <line_number>,\n\
+      \"severity\": \"Critical|High|Medium|Low\",\n\
+      \"message\": \"Description of the finding\",\n\
+      \"suggestion\": \"Optional code suggestion\"\n\
+    }\n\
+  ],\n\
+  \"summary\": \"Overall summary of the review\"\n\
+}";
 
 /// Files to exclude from context building
 const EXCLUDED_FILES: &[&str] = &[
@@ -76,8 +92,11 @@ impl PromptRegistry {
             Ok(format!(
                 "{} Using the prompt kernel/review-core.md run a deep dive regression analysis of the top commit in the Linux source tree.\n\n\
                  ## Review Protocol (review-core.md)\n\
-                 {}\n\nAnalyze the provided patch:",
-                SYSTEM_IDENTITY, review_core
+                 {}\n\n\
+                 # Task\n\
+                 {}\n\n\
+                 Analyze the provided patch:",
+                SYSTEM_IDENTITY, review_core, TASK_INSTRUCTION
             ))
         }
     }
