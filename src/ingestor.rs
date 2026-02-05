@@ -469,7 +469,10 @@ impl Ingestor {
                             group, epoch, url, epoch_path
                         );
 
-                        if let Err(e) = self.bootstrap_repo(&url, &epoch_path, group_remaining).await {
+                        if let Err(e) = self
+                            .bootstrap_repo(&url, &epoch_path, group_remaining)
+                            .await
+                        {
                             error!("Failed to bootstrap group {} epoch {}: {}", group, epoch, e);
                             continue;
                         } else {
@@ -654,10 +657,7 @@ impl Ingestor {
     }
     async fn run_nntp(&self) -> Result<()> {
         let groups = self.get_tracked_groups();
-        info!(
-            "Starting NNTP Ingestor for groups: {:?}",
-            groups
-        );
+        info!("Starting NNTP Ingestor for groups: {:?}", groups);
 
         loop {
             if let Err(e) = self.process_nntp_cycle().await {
@@ -689,7 +689,10 @@ impl Ingestor {
                 // This ensures we catch up if git archive is slightly stale.
                 current = info.high.saturating_sub(4000);
                 self.db.update_last_article_num(group_name, current).await?;
-                info!("Initialized high-water mark to {} (overlap window)", current);
+                info!(
+                    "Initialized high-water mark to {} (overlap window)",
+                    current
+                );
             }
 
             // Fetch ALL pending messages

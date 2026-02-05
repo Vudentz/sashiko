@@ -245,13 +245,14 @@ impl Reviewer {
         // patches_json for input payload (contains all patches)
         let patches_json: Vec<_> = diffs
             .iter()
-            .map(|(_id, idx, diff, subj, auth, date)| {
+            .map(|(_id, idx, diff, subj, auth, date, msg_id)| {
                 json!({
                     "index": idx,
                     "diff": diff,
                     "subject": subj,
                     "author": auth,
-                    "date": date
+                    "date": date,
+                    "message_id": msg_id
                 })
             })
             .collect();
@@ -345,7 +346,7 @@ impl Reviewer {
         ctx: &ReviewContext,
         candidate: &BaselineResolution,
         patchset_id: i64,
-        diffs: &[(i64, i64, String, String, String, i64)],
+        diffs: &[(i64, i64, String, String, String, i64, String)],
         input_payload: &Value,
     ) -> (bool, bool) {
         let repo_path = PathBuf::from(&ctx.settings.git.repository_path);
@@ -373,7 +374,7 @@ impl Reviewer {
         let mut candidate_success = true;
         let mut application_failed = false;
 
-        for (patch_id, index, _diff, _subj, _auth, _date) in diffs {
+        for (patch_id, index, _diff, _subj, _auth, _date, _msg_id) in diffs {
             let result = Self::process_patch_in_candidate(
                 ctx,
                 patchset_id,
@@ -715,7 +716,10 @@ impl Reviewer {
                         let error_msg = json_output["error"]
                             .as_str()
                             .unwrap_or("Patch application failed");
-                        error!("Patch application failed for ps={} review={}: {}", patchset_id, review_id, error_msg);
+                        error!(
+                            "Patch application failed for ps={} review={}: {}",
+                            patchset_id, review_id, error_msg
+                        );
                         let _ = ctx
                             .db
                             .update_review_status(
@@ -839,7 +843,10 @@ async fn run_review_tool(
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                if line.contains(" ERROR ") || line.starts_with("Error:") || line.contains("panicked") {
+                if line.contains(" ERROR ")
+                    || line.starts_with("Error:")
+                    || line.contains("panicked")
+                {
                     error!("[review-bin] {}", line);
                 } else if line.contains(" WARN ") {
                     warn!("[review-bin] {}", line);
