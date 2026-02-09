@@ -2316,7 +2316,7 @@ impl Database {
         let mut rows = self
             .conn
             .query(
-                "SELECT r.id, r.model_name, r.summary, r.created_at, ai.input_context, ai.output_raw, 
+                "SELECT r.id, r.model, r.summary, r.created_at, ai.input_context, ai.output_raw, 
                         b.repo_url, b.branch, b.last_known_commit,
                         r.provider, r.prompts_git_hash, r.result_description,
                         r.status, r.inline_review, r.logs, ai.tokens_in, ai.tokens_out, r.patch_id, ai.tokens_cached
