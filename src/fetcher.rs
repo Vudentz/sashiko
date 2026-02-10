@@ -374,9 +374,16 @@ impl FetchAgent {
             .await?;
 
         let base_commit = if parent_output.status.success() {
-            Some(String::from_utf8_lossy(&parent_output.stdout).trim().to_string())
+            Some(
+                String::from_utf8_lossy(&parent_output.stdout)
+                    .trim()
+                    .to_string(),
+            )
         } else {
-            warn!("Failed to resolve parent for {}, using commit as base", commit);
+            warn!(
+                "Failed to resolve parent for {}, using commit as base",
+                commit
+            );
             Some(commit.to_string())
         };
 

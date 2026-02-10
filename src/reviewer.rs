@@ -20,7 +20,7 @@ use crate::ai::gemini::{
 use crate::ai::proxy::QuotaManager;
 use crate::baseline::{BaselineRegistry, BaselineResolution, extract_files_from_diff};
 use crate::db::{AiInteractionParams, Database, Finding, PatchsetRow, Severity, ToolUsage};
-use crate::git_ops::{ensure_remote, get_commit_hash, GitWorktree};
+use crate::git_ops::{GitWorktree, ensure_remote, get_commit_hash};
 use crate::settings::Settings;
 use anyhow::Result;
 use serde::Serialize;
@@ -372,7 +372,7 @@ impl Reviewer {
             } else {
                 ReviewStatus::Reviewed.as_str().to_string() // Partial success
             };
-             
+
             let _ = ctx
                 .db
                 .update_patchset_status(patchset_id, &final_status)
@@ -638,7 +638,12 @@ impl Reviewer {
         if successful_count >= ctx.target_review_count {
             info!(
                 "Patch {}/{} (ID: {}) already has {} successful reviews with baseline {:?} (target: {}). Skipping.",
-                patchset_id, index, patch_id, successful_count, baseline_id, ctx.target_review_count
+                patchset_id,
+                index,
+                patch_id,
+                successful_count,
+                baseline_id,
+                ctx.target_review_count
             );
             return Ok(PatchResult::Success);
         }
@@ -697,8 +702,8 @@ impl Reviewer {
                     };
 
                     if let Some(h) = history.and_then(|h| h.as_array()) {
-                         // Tool usage recording (same as before)
-                         for item in h {
+                        // Tool usage recording (same as before)
+                        for item in h {
                             if let Some(parts) = item.get("parts").and_then(|p| p.as_array()) {
                                 for part in parts {
                                     if let Some(call) = part.get("functionCall") {
@@ -893,7 +898,7 @@ impl Reviewer {
                             let error_msg = json_output["error"]
                                 .as_str()
                                 .unwrap_or("Missing review content");
-                             let _ = ctx
+                            let _ = ctx
                                 .db
                                 .complete_review(
                                     review_id,
@@ -905,14 +910,14 @@ impl Reviewer {
                                     logs_str.as_deref(),
                                 )
                                 .await;
-                             return Ok(PatchResult::ReviewFailed);
+                            return Ok(PatchResult::ReviewFailed);
                         }
                     } else {
-                         // Apply failed in tool
-                         let error_msg = json_output["error"]
+                        // Apply failed in tool
+                        let error_msg = json_output["error"]
                             .as_str()
                             .unwrap_or("Patch application failed");
-                         let _ = ctx
+                        let _ = ctx
                             .db
                             .complete_review(
                                 review_id,

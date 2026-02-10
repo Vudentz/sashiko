@@ -1,7 +1,7 @@
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::BufReader;
-use reqwest::Client;
 
 #[derive(Deserialize)]
 struct BenchmarkEntry {
@@ -12,10 +12,7 @@ struct BenchmarkEntry {
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum SubmitRequest {
-    Remote {
-        sha: String,
-        repo: String,
-    },
+    Remote { sha: String, repo: String },
 }
 
 #[tokio::main]
@@ -38,7 +35,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             repo: repo_url.to_string(),
         };
 
-        let res = client.post("http://127.0.0.1:8080/api/submit")
+        let res = client
+            .post("http://127.0.0.1:8080/api/submit")
             .json(&payload)
             .send()
             .await;
@@ -50,7 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     let status = response.status();
                     let text = response.text().await.unwrap_or_default();
-                    eprintln!("Failed to submit {}: Status {} Body: {}", entry.commit, status, text);
+                    eprintln!(
+                        "Failed to submit {}: Status {} Body: {}",
+                        entry.commit, status, text
+                    );
                 }
             }
             Err(e) => {

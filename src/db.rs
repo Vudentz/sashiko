@@ -357,18 +357,14 @@ impl Database {
         let _ = self
             .try_add_column("patchsets", "target_review_count", "INTEGER DEFAULT 1")
             .await;
-        let _ = self
-            .try_add_column("patchsets", "model_name", "TEXT")
-            .await;
+        let _ = self.try_add_column("patchsets", "model_name", "TEXT").await;
         let _ = self
             .try_add_column("patchsets", "prompts_git_hash", "TEXT")
             .await;
         let _ = self
             .try_add_column("patchsets", "baseline_logs", "TEXT")
             .await;
-        let _ = self
-            .try_add_column("patchsets", "provider", "TEXT")
-            .await;
+        let _ = self.try_add_column("patchsets", "provider", "TEXT").await;
 
         let _ = self
             .conn
@@ -2170,19 +2166,25 @@ impl Database {
             let baseline_logs: Option<String> = row.get(14).ok();
             let baseline_id: Option<i64> = row.get(15).ok();
             let provider: Option<String> = row.get(16).ok();
-            
+
             // Fetch baseline details if needed
             let baseline = if let Some(bid) = baseline_id {
-                 let mut browse = self.conn.query("SELECT repo_url, branch, last_known_commit FROM baselines WHERE id = ?", libsql::params![bid]).await?;
-                 if let Ok(Some(brow)) = browse.next().await {
-                     Some(serde_json::json!({
-                        "repo_url": brow.get::<Option<String>>(0).ok(),
-                        "branch": brow.get::<Option<String>>(1).ok(),
-                        "commit": brow.get::<Option<String>>(2).ok(),
-                     }))
-                 } else {
-                     None
-                 }
+                let mut browse = self
+                    .conn
+                    .query(
+                        "SELECT repo_url, branch, last_known_commit FROM baselines WHERE id = ?",
+                        libsql::params![bid],
+                    )
+                    .await?;
+                if let Ok(Some(brow)) = browse.next().await {
+                    Some(serde_json::json!({
+                       "repo_url": brow.get::<Option<String>>(0).ok(),
+                       "branch": brow.get::<Option<String>>(1).ok(),
+                       "commit": brow.get::<Option<String>>(2).ok(),
+                    }))
+                } else {
+                    None
+                }
             } else {
                 None
             };
@@ -3815,7 +3817,14 @@ mod tests {
 
         // 2. Failed Review (No interaction) -> Should be detected
         let review_id = db
-            .create_review(ps_id, Some(patch_id), "gemini", "gemini-1.5-pro", None, None)
+            .create_review(
+                ps_id,
+                Some(patch_id),
+                "gemini",
+                "gemini-1.5-pro",
+                None,
+                None,
+            )
             .await
             .unwrap();
         db.update_review_status(review_id, "FailedToApply", None)

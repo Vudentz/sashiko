@@ -304,8 +304,16 @@ impl GeminiClient {
         }
 
         if res.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            let retry_after_header = res
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|h| h.to_str().ok())
+                .and_then(|s| s.parse::<f64>().ok());
+
             let error_text = res.text().await?;
-            let retry_seconds = if let Some(caps) = re.captures(&error_text) {
+            let retry_seconds = if let Some(secs) = retry_after_header {
+                secs
+            } else if let Some(caps) = re.captures(&error_text) {
                 caps[1].parse::<f64>().unwrap_or(30.0)
             } else {
                 30.0

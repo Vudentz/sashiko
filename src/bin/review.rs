@@ -474,7 +474,6 @@ async fn main() -> Result<()> {
             error!("Failed to remove worktree: {}", e);
         }
 
-
         result
     };
 
