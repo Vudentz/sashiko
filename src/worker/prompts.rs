@@ -74,26 +74,19 @@ impl PromptRegistry {
         self.append_directory(&mut content, &self.base_dir.join("nfsd"), |_| true)
             .await?;
 
-        // 5. Task Instructions
-        content.push_str("\n\n");
-        content.push_str(OUTPUT_FORMAT_INSTRUCTION);
-
         Ok(content)
     }
 
     /// Returns the initial user message to start the task.
     /// - `use_cache`: If true, assumes `build_context` is already in the cache.
     pub async fn get_user_task_prompt(&self, use_cache: bool) -> Result<String> {
-        if use_cache {
-            // In cached mode, the context (Identity + Instructions + Protocol) is already pre-loaded.
-            // We provide a minimal trigger that references the specific section.
-            Ok("Refer to the `# review-core.md` section in the pre-loaded context and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. Do NOT attempt to load any additional prompts.".to_string())
+        let trigger = if use_cache {
+            "Refer to the `# review-core.md` section in the pre-loaded context and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. Do NOT attempt to load any additional prompts."
         } else {
-            // In non-cached mode, we must provide the Output Instructions explicitly,
-            // followed by the trigger to load the protocol.
-            let trigger = "Load the protocol from `review-core.md` and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. You also must load the `inline-template.md` and `severity.md` prompts.";
-            Ok(format!("{}\n\n{}", OUTPUT_FORMAT_INSTRUCTION, trigger))
-        }
+            "Load the protocol from `review-core.md` and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. You also must load the `inline-template.md` and `severity.md` prompts."
+        };
+
+        Ok(format!("{}\n\n{}", trigger, OUTPUT_FORMAT_INSTRUCTION))
     }
 
     async fn append_file(&self, buffer: &mut String, filename: &str) -> Result<()> {
