@@ -276,4 +276,24 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_create_provider() -> Result<()> {
+        let mut settings = Settings::new().expect("Failed to load settings");
+        settings.ai.provider = "gemini".to_string();
+        settings.ai.model = "gemini-1.5-flash".to_string();
+
+        let provider = create_provider(&settings)?;
+        assert_eq!(provider.get_capabilities().model_name, "gemini-1.5-flash");
+
+        settings.ai.provider = "stdio-gemini".to_string();
+        let provider = create_provider(&settings)?;
+        assert_eq!(provider.get_capabilities().model_name, "stdio-gemini");
+
+        settings.ai.provider = "unknown".to_string();
+        let result = create_provider(&settings);
+        assert!(result.is_err());
+
+        Ok(())
+    }
 }
