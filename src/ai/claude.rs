@@ -496,3 +496,80 @@ impl AiProvider for ClaudeClient {
         bail!("Claude uses automatic caching, not explicit cache management")
     }
 }
+
+// --- StdioClaudeClient for IPC ---
+
+pub struct StdioClaudeClient;
+
+#[async_trait]
+trait GenClaudeClient: Send + Sync {
+    async fn exec_stdio(&self, msg: Value) -> Result<AiResponse> {
+        tokio::task::spawn_blocking(move || -> Result<AiResponse> {
+            println!("{}", serde_json::to_string(&msg)?);
+            use std::io::Write;
+            std::io::stdout().flush()?;
+
+            let stdin = std::io::stdin();
+            let mut line = String::new();
+            if stdin.read_line(&mut line)? == 0 {
+                bail!("Unexpected EOF from stdin waiting for AI response");
+            }
+
+            let resp_msg: Value = serde_json::from_str(&line)?;
+            if resp_msg["type"] == "ai_response" {
+                let payload = serde_json::from_value(resp_msg["payload"].clone())?;
+                Ok(payload)
+            } else if resp_msg["type"] == "error" {
+                let err_msg = resp_msg["payload"].as_str().unwrap_or("Unknown error");
+                bail!("Remote AI Error: {}", err_msg)
+            } else {
+                bail!("Unexpected response type: {:?}", resp_msg["type"])
+            }
+        })
+        .await?
+    }
+}
+
+impl GenClaudeClient for StdioClaudeClient {}
+
+#[async_trait]
+impl AiProvider for StdioClaudeClient {
+    async fn generate_content(&self, request: AiRequest) -> Result<AiResponse> {
+        let msg = serde_json::json!({
+            "type": "ai_request",
+            "payload": request
+        });
+        self.exec_stdio(msg).await
+    }
+
+    fn estimate_tokens(&self, request: &AiRequest) -> usize {
+        estimate_tokens_generic(request)
+    }
+
+    fn get_capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities {
+            model_name: "stdio-claude".to_string(),
+            max_input_tokens: 200_000,
+            max_output_tokens: 8_192,
+            supports_function_calling: true,
+            supports_context_caching: true,
+        }
+    }
+
+    async fn create_context_cache(
+        &self,
+        _request: AiRequest,
+        _ttl: String,
+        _display_name: Option<String>,
+    ) -> Result<String> {
+        bail!("Claude uses automatic caching, not explicit cache creation")
+    }
+
+    async fn delete_context_cache(&self, _name: &str) -> Result<()> {
+        bail!("Claude uses automatic caching, not explicit cache management")
+    }
+
+    async fn list_context_caches(&self) -> Result<Vec<(String, String)>> {
+        bail!("Claude uses automatic caching, not explicit cache management")
+    }
+}
