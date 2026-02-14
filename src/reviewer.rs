@@ -160,7 +160,14 @@ impl Reviewer {
         }
 
         // Ensure Context Cache
-        if self.settings.ai.explicit_prompts_caching {
+        if self
+            .settings
+            .ai
+            .gemini
+            .as_ref()
+            .map(|g| g.explicit_prompt_caching)
+            .unwrap_or(false)
+        {
             match self.cache_manager.ensure_cache(None).await {
                 Ok(name) => {
                     info!("AI Context Cache initialized: {}", name);
@@ -1038,7 +1045,13 @@ async fn run_review_tool(
     }
 
     if let Some(name) = cache_name {
-        if settings.ai.explicit_prompts_caching {
+        if settings
+            .ai
+            .gemini
+            .as_ref()
+            .map(|g| g.explicit_prompt_caching)
+            .unwrap_or(false)
+        {
             cmd.arg("--gemini-cache").arg(name);
         }
     }
