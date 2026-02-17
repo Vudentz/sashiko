@@ -565,41 +565,7 @@ pub async fn get_git_log(params: GitLogParams) -> Result<String> {
     }
 }
 
-pub async fn get_range_base(repo_path: &Path, rev_range: &str) -> Result<String> {
-    // Heuristic to determine the base commit
-    let base_rev = if rev_range.contains("...") {
-        // Symmetric difference: use merge-base
-        let parts: Vec<&str> = rev_range.split("...").collect();
-        if parts.len() == 2 {
-            let output = Command::new("git")
-                .current_dir(repo_path)
-                .args(["merge-base", parts[0], parts[1]])
-                .output()
-                .await?;
-            if output.status.success() {
-                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
-            }
-        }
-        // Fallback or error
-        return Err(anyhow!("Could not determine merge-base for {}", rev_range));
-    } else if rev_range.contains("..") {
-        // Range: use start (left side)
-        // Handle "A..B" -> A
-        // Handle "..B" -> HEAD (usually implies HEAD..B).
-        // Let's assume standard A..B
-        let parts: Vec<&str> = rev_range.split("..").collect();
-        if !parts[0].is_empty() {
-            parts[0].to_string()
-        } else {
-            "HEAD".to_string()
-        }
-    } else {
-        // Single commit: treated as <since>..HEAD by format-patch, so base is the commit itself
-        rev_range.to_string()
-    };
 
-    get_commit_hash(repo_path, &base_rev).await
-}
 
 #[cfg(test)]
 mod tests {
@@ -683,92 +649,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_get_range_base() -> Result<()> {
-        let temp_dir = tempfile::tempdir()?;
-        let repo_path = temp_dir.path().to_path_buf();
 
-        // Init git repo
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["init"])
-            .output()
-            .await?;
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["config", "user.email", "test@example.com"])
-            .output()
-            .await?;
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["config", "user.name", "Test User"])
-            .output()
-            .await?;
-
-        // C1
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["commit", "--allow-empty", "-m", "C1"])
-            .output()
-            .await?;
-        let c1 = get_commit_hash(&repo_path, "HEAD").await?;
-
-        // Tag v1
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["tag", "v1"])
-            .output()
-            .await?;
-
-        // C2
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["commit", "--allow-empty", "-m", "C2"])
-            .output()
-            .await?;
-        let c2 = get_commit_hash(&repo_path, "HEAD").await?;
-
-        // Branch feature
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["branch", "feature"])
-            .output()
-            .await?;
-
-        // C3
-        Command::new("git")
-            .current_dir(&repo_path)
-            .args(["commit", "--allow-empty", "-m", "C3"])
-            .output()
-            .await?;
-        let c3 = get_commit_hash(&repo_path, "HEAD").await?;
-
-        // Test C1..C3 -> C1
-        let base = get_range_base(&repo_path, "HEAD~2..HEAD").await?;
-        assert_eq!(base, c1);
-
-        // Test C2..C3 -> C2
-        let base = get_range_base(&repo_path, "HEAD~1..HEAD").await?;
-        assert_eq!(base, c2);
-
-        // Test single commit C3 (as range start) -> C3
-        let base = get_range_base(&repo_path, &c3).await?;
-        assert_eq!(base, c3);
-
-        // Test merge base (simple linear) C1...C3 -> C1
-        let base = get_range_base(&repo_path, "HEAD~2...HEAD").await?;
-        assert_eq!(base, c1);
-
-        // Test with Tag: v1..HEAD (v1 is C1) -> C1
-        let base = get_range_base(&repo_path, "v1..HEAD").await?;
-        assert_eq!(base, c1);
-
-        // Test with Branch: feature (is C2) -> C2 (as range start)
-        let base = get_range_base(&repo_path, "feature").await?;
-        assert_eq!(base, c2);
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn test_apply_patch_failure() -> Result<()> {
