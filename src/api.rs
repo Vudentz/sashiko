@@ -99,12 +99,12 @@ pub enum SubmitRequest {
     },
     Remote {
         sha: String,
-        repo: String,
+        repo: Option<String>,
     },
     #[serde(rename = "remote-range")]
     RemoteRange {
         sha: String,
-        repo: String,
+        repo: Option<String>,
     },
 }
 
@@ -218,12 +218,13 @@ async fn submit_patch(
         }
         SubmitRequest::Remote { sha, repo } | SubmitRequest::RemoteRange { sha, repo } => {
             let id = sha.clone();
-            info!("Received remote fetch request: {} from {}", sha, repo);
+            let repo_display = repo.as_deref().unwrap_or("local");
+            info!("Received remote fetch request: {} from {}", sha, repo_display);
 
             // Create a placeholder record in the DB so the user can track status
             if let Err(e) = state
                 .db
-                .create_fetching_patchset(&id, &format!("Fetching {} from {}...", &sha, &repo))
+                .create_fetching_patchset(&id, &format!("Fetching {} from {}...", &sha, repo_display))
                 .await
             {
                 error!("Failed to create placeholder patchset: {}", e);

@@ -176,7 +176,7 @@ async fn handle_submit(
     repo: Option<PathBuf>,
     baseline: Option<String>,
     format: OutputFormat,
-    settings: &Settings,
+    _settings: &Settings,
 ) -> Result<()> {
     let url = format!("{}/api/submit", base_url);
 
@@ -233,8 +233,7 @@ async fn handle_submit(
             }
         }
         SubmitType::Remote => {
-            let repo_path = repo.map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| settings.git.repository_path.clone());
+            let repo_path = repo.map(|p| p.to_string_lossy().to_string());
 
             SubmitRequest::Remote {
                 sha: target,
@@ -242,8 +241,7 @@ async fn handle_submit(
             }
         },
         SubmitType::Range => {
-            let repo_path = repo.map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| settings.git.repository_path.clone());
+            let repo_path = repo.map(|p| p.to_string_lossy().to_string());
 
             SubmitRequest::RemoteRange {
                 sha: target,

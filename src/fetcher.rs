@@ -24,7 +24,7 @@ use tracing::{error, info, warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FetchRequest {
-    pub repo_url: String,
+    pub repo_url: Option<String>,
     pub commit_hash: String,
 }
 
@@ -52,7 +52,7 @@ impl FetchAgent {
 
     pub async fn run(mut self) {
         info!("FetchAgent started");
-        let mut queue: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut queue: HashMap<Option<String>, HashSet<String>> = HashMap::new();
         let mut ticker = interval(Duration::from_secs(10));
 
         loop {
@@ -71,60 +71,93 @@ impl FetchAgent {
         }
     }
 
-    async fn process_queue(&self, queue: &mut HashMap<String, HashSet<String>>) {
+    async fn process_queue(&self, queue: &mut HashMap<Option<String>, HashSet<String>>) {
         info!("Processing fetch queue with {} repos", queue.len());
 
-        for (url, commits) in queue.drain() {
+        for (url_opt, commits) in queue.drain() {
             if commits.is_empty() {
                 continue;
             }
 
             let commit_list: Vec<String> = commits.into_iter().collect();
-            let remote_name = self.get_remote_name(&url);
+            let url_display = url_opt.as_deref().unwrap_or("local");
 
             info!(
-                "Processing {} commits for remote {} ({})",
+                "Processing {} commits for remote {}",
                 commit_list.len(),
-                remote_name,
-                url
+                url_display
             );
 
-            if let Err(e) = self.ensure_remote(&remote_name, &url).await {
-                error!("Failed to ensure remote {}: {}", url, e);
-                for commit in commit_list {
-                    let _ = self
-                        .main_tx
-                        .send(Event::IngestionFailed {
-                            article_id: commit,
-                            error: format!("Failed to set up remote {}: {}", url, e),
-                        })
-                        .await;
+            // Check existence first
+            let mut missing_commits = Vec::new();
+            for commit in &commit_list {
+                if !self.is_present(commit).await {
+                    missing_commits.push(commit.clone());
                 }
-                continue;
             }
 
-            // 1. Try optimistic fetch (fetch specific commits)
-            // Many servers deny this (allowReachableSHA1InWant=false), but some support it.
-            // We construct `git fetch remote sha1 sha2 ...`
-            if let Err(e) = self.fetch_commits(&remote_name, &commit_list).await {
-                warn!(
-                    "Optimistic fetch failed for {}: {}. Falling back to full fetch.",
-                    url, e
-                );
-                // 2. Fallback: Fetch everything (heads)
-                if let Err(e) = self.fetch_all(&remote_name).await {
-                    error!("Full fetch failed for {}: {}", url, e);
-                    for commit in commit_list {
-                        let _ = self
-                            .main_tx
-                            .send(Event::IngestionFailed {
-                                article_id: commit,
-                                error: format!("Failed to fetch from {}: {}", url, e),
-                            })
-                            .await;
+            if missing_commits.is_empty() {
+                info!("All commits present locally, skipping fetch for {}", url_display);
+            } else if let Some(url) = url_opt {
+                // Remote fetch logic
+                let remote_name = self.get_remote_name(&url);
+
+                // Check if repo is local (same as self.repo_path)
+                let is_local = {
+                    let url_path = PathBuf::from(&url);
+                    if let (Ok(canon_url), Ok(canon_repo)) = (
+                        std::fs::canonicalize(&url_path),
+                        std::fs::canonicalize(&self.repo_path)
+                    ) {
+                        canon_url == canon_repo
+                    } else {
+                        false
                     }
-                    continue;
+                };
+
+                if is_local {
+                    warn!("Repository is local but commits are missing: {:?}. Cannot fetch.", missing_commits);
+                    // Do not continue here; let it fall through to Step 3 where it will fail individually
+                } else {
+                    if let Err(e) = self.ensure_remote(&remote_name, &url).await {
+                        error!("Failed to ensure remote {}: {}", url, e);
+                        for commit in &missing_commits {
+                            let _ = self
+                                .main_tx
+                                .send(Event::IngestionFailed {
+                                    article_id: commit.clone(),
+                                    error: format!("Failed to set up remote {}: {}", url, e),
+                                })
+                                .await;
+                        }
+                        continue;
+                    }
+
+                    // 1. Try optimistic fetch (fetch specific commits)
+                    if let Err(e) = self.fetch_commits(&remote_name, &missing_commits).await {
+                        warn!(
+                            "Optimistic fetch failed for {}: {}. Falling back to full fetch.",
+                            url, e
+                        );
+                        // 2. Fallback: Fetch everything (heads)
+                        if let Err(e) = self.fetch_all(&remote_name).await {
+                            error!("Full fetch failed for {}: {}", url, e);
+                            for commit in &missing_commits {
+                                let _ = self
+                                    .main_tx
+                                    .send(Event::IngestionFailed {
+                                        article_id: commit.clone(),
+                                        error: format!("Failed to fetch from {}: {}", url, e),
+                                    })
+                                    .await;
+                            }
+                            continue;
+                        }
+                    }
                 }
+            } else {
+                // Local repo, but commits are missing
+                warn!("Local repository missing commits: {:?}. Cannot fetch.", missing_commits);
             }
 
             // 3. Process each commit or range
@@ -371,6 +404,24 @@ impl FetchAgent {
             ));
         }
         Ok(())
+    }
+
+    async fn is_present(&self, commit_or_range: &str) -> bool {
+        let args = if commit_or_range.contains("..") {
+            vec!["rev-list", "-n", "1", commit_or_range]
+        } else {
+            vec!["rev-parse", "--verify", commit_or_range]
+        };
+
+        let status = Command::new("git")
+            .current_dir(&self.repo_path)
+            .args(&args)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        matches!(status, Ok(s) if s.success())
     }
 
     async fn resolve_sha(&self, commit: &str) -> Result<String> {
