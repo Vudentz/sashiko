@@ -296,12 +296,6 @@ impl Reviewer {
             })
             .collect();
 
-        let input_payload = json!({
-            "id": patchset_id,
-            "subject": patchset.subject.clone().unwrap_or("Unknown".to_string()),
-            "patches": patches_json
-        });
-
         // Determine Baseline Candidates
         let mut all_files = Vec::new();
         for p in patches_json.iter() {
@@ -360,6 +354,40 @@ impl Reviewer {
                     Some(ctx.settings.ai.provider.as_str()),
                 )
                 .await;
+
+            // patches_json for input payload (contains all patches)
+            let patches_json: Vec<_> = diffs
+                .iter()
+                .map(|(_id, idx, diff, subj, auth, date, msg_id)| {
+                    let resolved_sha = patch_commits.get(idx);
+                    let is_msg_sha =
+                        msg_id.len() == 40 && msg_id.chars().all(|c| c.is_ascii_hexdigit());
+
+                    let commit_id = if let Some(sha) = resolved_sha {
+                        Some(sha.as_str())
+                    } else if is_msg_sha {
+                        Some(msg_id.as_str())
+                    } else {
+                        None
+                    };
+
+                    json!({
+                        "index": idx,
+                        "diff": diff,
+                        "subject": subj,
+                        "author": auth,
+                        "date": date,
+                        "message_id": msg_id,
+                        "commit_id": commit_id
+                    })
+                })
+                .collect();
+
+            let input_payload = json!({
+                "id": patchset_id,
+                "subject": patchset.subject.clone().unwrap_or("Unknown".to_string()),
+                "patches": patches_json
+            });
 
             // 2. Run Reviews
             let mut review_success = true; // Optimistic
