@@ -510,32 +510,30 @@ impl Worker {
                 // Continue loop to get model response to tool outputs
             } else if let Some(final_text) = resp.content {
                 // Try to clean up markdown code blocks if present
-                let clean_text = final_text.trim();
-                let clean_text = if clean_text.starts_with("```json") {
-                    clean_text
-                        .strip_prefix("```json")
-                        .unwrap_or(clean_text)
-                        .strip_suffix("```")
-                        .unwrap_or(clean_text)
-                        .trim()
-                } else if clean_text.starts_with("```") {
-                    clean_text
-                        .strip_prefix("```")
-                        .unwrap_or(clean_text)
-                        .strip_suffix("```")
-                        .unwrap_or(clean_text)
-                        .trim()
-                } else {
-                    clean_text
-                };
+                let mut clean_text = final_text.trim();
+                if let Some(start) = clean_text.find("```json\n") {
+                    let rest = &clean_text[start + 8..];
+                    if let Some(end) = rest.find("```") {
+                        clean_text = rest[..end].trim();
+                    }
+                } else if let Some(start) = clean_text.find("```\n") {
+                    let rest = &clean_text[start + 4..];
+                    if let Some(end) = rest.find("```") {
+                        clean_text = rest[..end].trim();
+                    }
+                }
 
                 let json_val: Value = match serde_json::from_str(clean_text) {
                     Ok(v) => v,
                     Err(e) => {
                         // Fallback: scan for JSON objects
                         let candidates = find_json_candidates(final_text.as_str());
-                        if let Some(v) = candidates.last() {
-                            v.clone()
+                        let valid_candidate = candidates.into_iter().rev().find(|v| {
+                            v.get("findings").is_some() || v.get("summary").is_some() || v.get("review_inline").is_some()
+                        });
+
+                        if let Some(v) = valid_candidate {
+                            v
                         } else {
                             return Ok(WorkerResult {
                                 output: None,
