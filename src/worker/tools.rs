@@ -41,6 +41,10 @@ impl ToolBox {
         }
     }
 
+    pub fn get_worktree_path(&self) -> &Path {
+        &self.worktree_path
+    }
+
     /// Returns Gemini-specific tool declarations.
     /// TODO: Deprecate after migration.
     pub fn get_declarations(&self) -> Tool {

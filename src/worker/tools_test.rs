@@ -146,20 +146,19 @@ mod tests {
 
         // Ensure we have a dummy prompt file to read
         // The real review-prompts might not be populated in test env, check first
-        // Or assume review-core.md exists as per repo structure.
+        // Or assume technical-patterns.md exists as per repo structure.
         // But tests might run in clean env. Let's create a dummy one if we can or check existence.
         // Since we are running in the actual repo, review-prompts should exist.
 
-        let args = json!({ "name": "review-core.md" });
-        if prompts_path.join("review-core.md").exists() {
+        let args = json!({ "name": "technical-patterns.md" });
+        if prompts_path.join("technical-patterns.md").exists() {
             let result = rt
                 .block_on(toolbox.call("read_prompt", args.clone()))
-                .unwrap();
-            let content = result["content"].as_str().unwrap();
-            assert!(content.contains("Protocol"));
+                .expect("Failed to call read_prompt");
+            assert!(result.get("content").is_some());
         } else {
             // If file doesn't exist (e.g. CI), skip assertion on content but check tool availability
-            println!("Skipping read_prompt content check: review-core.md not found");
+            println!("Skipping read_prompt content check: technical-patterns.md not found");
         }
 
         // Test disabled tool

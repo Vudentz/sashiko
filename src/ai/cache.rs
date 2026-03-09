@@ -46,7 +46,7 @@ impl CacheManager {
     /// Builds the full context string from prompts directory.
     /// Delegates to PromptRegistry.
     async fn build_context(&self) -> Result<String> {
-        self.prompts.build_context().await
+        self.prompts.build_context().await.map(|(s, _)| s)
     }
 
     /// Calculates hash of content and tools for cache key.

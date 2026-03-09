@@ -12,31 +12,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::ai::{AiMessage, AiProvider, AiRole};
+use crate::worker::tools::ToolBox;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
+use tracing::{info, warn};
 
 /// System identity prompt - used across all AI interactions
-pub const SYSTEM_IDENTITY: &str = "You're an expert Linux kernel developer and upstream maintainer with deep knowledge of Linux kernel, Operating Systems, CPU architectures, modern hardware and Linux kernel community standards and processes.";
+pub const SYSTEM_IDENTITY: &str = "";
 
-pub const OUTPUT_FORMAT_INSTRUCTION: &str = r#"Important: `review_inline` field of the final output *MUST* follow the format and guidelines provided in `inline-template.md`.
-
-When you are completely finished with your investigation and have no more tools to call, output the final result strictly as a JSON object matching this schema:
-```json
-{
-  "summary": "High-level summary of the original change being reviewed.",
-  "review_inline": "The full content of the inline review (formatted according to inline-template.md). This MUST be populated if there are any findings.",
-  "findings": [
-    {
-      "severity": "Low|Medium|High|Critical",
-      "severity_explanation": "Concise explanation (e.g. 'memory leak on a hot path')",
-      "problem": "Description of the problem",
-      "suggestion": "Suggested fix"
-    }
-  ]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct PatchInput {
+    pub index: i64,
+    pub diff: String,
+    pub subject: Option<String>,
+    pub author: Option<String>,
+    pub date: Option<i64>,
+    #[serde(default)]
+    pub message_id: Option<String>,
+    #[serde(default)]
+    pub commit_id: Option<String>,
 }
-```"#;
+
+pub struct WorkerConfig {
+    pub max_input_tokens: usize,
+    pub max_interactions: usize,
+    pub temperature: f32,
+    pub cache_name: Option<String>,
+    pub custom_prompt: Option<String>,
+    pub series_range: Option<String>,
+}
+
+pub struct WorkerResult {
+    pub output: Option<Value>,
+    pub error: Option<String>,
+    pub input_context: String,
+    pub history: Vec<AiMessage>,
+    pub history_before_pruning: Vec<AiMessage>,
+    pub history_after_pruning: Vec<AiMessage>,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    pub tokens_cached: u32,
+}
 
 pub struct PromptRegistry {
     base_dir: PathBuf,
@@ -55,98 +77,164 @@ impl PromptRegistry {
     /// This is used for:
     /// 1. Populating the Context Cache.
     /// 2. Constructing the full prompt in non-cached mode.
-    pub async fn build_context(&self) -> Result<String> {
+    pub async fn build_context(&self) -> Result<(String, String)> {
+        let mut clean = String::with_capacity(50_000);
+        let mut clean_files = Vec::new();
         let mut content = String::with_capacity(50_000);
 
-        // 1. System Identity
-        content.push_str(SYSTEM_IDENTITY);
-        content.push_str("\n\n");
+        content.push_str("You are an expert Linux kernel maintainer. Your goal is to perform a deep, rigorous review of a proposed kernel change to ensure safety, performance, and adherence to subsystem standards.\n\n");
+        content.push_str("<global_review_guidelines>\n");
+        content.push_str("The following documents contain the official technical patterns, architectural rules, and subsystem-specific guidelines that you MUST adhere to during your review. Use these as the absolute source of truth for identifying anti-patterns and violations.\n\n");
+        clean.push_str("You are an expert Linux kernel maintainer. Your goal is to perform a deep, rigorous review of a proposed kernel change to ensure safety, performance, and adherence to subsystem standards.\n\n");
+        clean.push_str("<global_review_guidelines>\n");
+        clean.push_str("The following documents contain the official technical patterns, architectural rules, and subsystem-specific guidelines that you MUST adhere to during your review. Use these as the absolute source of truth for identifying anti-patterns and violations.\n\n");
 
-        // 2. Core Protocol & Patterns
-        self.append_file(&mut content, "review-core.md").await?;
-        self.append_file(&mut content, "inline-template.md").await?;
-        self.append_file(&mut content, "technical-patterns.md")
-            .await?;
-        self.append_file(&mut content, "severity.md").await?;
-        self.append_file(&mut content, "callstack.md").await?;
-        self.append_file(&mut content, "false-positive-guide.md")
-            .await?;
-        self.append_file(&mut content, "pointer-guards.md").await?;
-
-        // 3. Subsystem Guidelines
+        // Subsystem Guidelines
         let subsystem_dir = self.base_dir.join("subsystem");
+
+        self.append_file(&mut content, &mut clean_files, "technical-patterns.md")
+            .await?;
+
         if subsystem_dir.exists() {
-            // New Structure (e.g. Kernel)
-            self.append_directory(&mut content, &subsystem_dir, |name| {
+            self.append_directory(&mut content, &mut clean_files, &subsystem_dir, |name| {
                 !matches!(name, "README.md" | "subsystem-template.md")
             })
             .await?;
 
             // Explicitly load nfsd from subsystem if it exists
-            self.append_directory(&mut content, &subsystem_dir.join("nfsd"), |_| true)
-                .await?;
-        } else {
-            // Old Structure / Systemd (root-based)
-            self.append_directory(&mut content, &self.base_dir, |name| {
-                !matches!(
-                    name,
-                    "review-core.md"
-                        | "inline-template.md"
-                        | "technical-patterns.md"
-                        | "README.md"
-                        | "review-one.md"
-                        | "review-stat.md"
-                        | "debugging.md"
-                        | "lore-thread.md"
-                        | "severity.md"
-                        | "callstack.md"
-                        | "false-positive-guide.md"
-                        | "pointer-guards.md"
-                )
-            })
+            self.append_directory(
+                &mut content,
+                &mut clean_files,
+                &subsystem_dir.join("nfsd"),
+                |_| true,
+            )
             .await?;
         }
 
-        // 4. Specific Pattern Directories
-        self.append_directory(&mut content, &self.base_dir.join("patterns"), |_| true)
-            .await?;
+        // Specific Pattern Directories
+        self.append_directory(
+            &mut content,
+            &mut clean_files,
+            &self.base_dir.join("patterns"),
+            |_| true,
+        )
+        .await?;
 
-        // Check root nfsd only if not using subsystem structure
-        if !subsystem_dir.exists() {
-            self.append_directory(&mut content, &self.base_dir.join("nfsd"), |_| true)
-                .await?;
+        content.push_str("</global_review_guidelines>\n");
+        if !clean_files.is_empty() {
+            clean.push_str(&clean_files.join(", "));
+            clean.push_str("\n\n");
         }
-
-        Ok(content)
+        clean.push_str("</global_review_guidelines>\n");
+        Ok((content, clean))
     }
 
-    /// Returns the initial user message to start the task.
-    /// - `use_cache`: If true, assumes `build_context` is already in the cache.
-    /// - `series_range`: Optional git range of the series (e.g. "base..head") to check for fixes.
-    pub async fn get_user_task_prompt(
-        &self,
-        use_cache: bool,
-        series_range: Option<String>,
-    ) -> Result<String> {
-        let trigger = if use_cache {
-            "Refer to the `# review-core.md` section in the pre-loaded context and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. Do NOT attempt to load any additional prompts."
-        } else {
-            "Load the protocol from `review-core.md` and run a deep dive regression analysis as described in the protocol of the top commit in the Linux source tree. You also must load the `inline-template.md` and `severity.md` prompts."
+    /// Returns the prompt for a specific stage, including any corresponding guidance files.
+    pub async fn get_stage_prompt(&self, stage: u8) -> Result<(String, String)> {
+        let mut clean = String::with_capacity(10_000);
+        let mut clean_files = Vec::new();
+        let mut content = String::with_capacity(10_000);
+
+        let stage_instruction = match stage {
+            1 => {
+                "# Stage 1. Analyze commit main goal
+
+You are a senior Linux kernel maintainer evaluating the high-level intent of a proposed commit. Analyze the commit message and the conceptual change. Focus on the big picture: Are there architectural flaws, UAPI breakages, backwards compatibility issues, or fundamentally flawed concepts? Consider the long-term maintainability and system-wide implications of this design. If the core idea is dangerous, incorrect, or violates established kernel principles, raise a concern. Be open-minded but thorough; question assumptions made by the author and consider alternative, simpler designs."
+            }
+            2 => {
+                "# Stage 2. High-level implementation verification
+
+You are verifying if the provided code changes actually implement what the commit message claims. Look for undocumented side-effects, missing pieces (e.g., a core change without updating corresponding callers, or changing a struct without updating all initializers), and unhandled corner cases related to the feature's logic. Explicitly check for missing API callbacks and interface omissions: when defining or modifying structures containing function pointers, verify that all logically required callbacks are implemented. Verify that all claims in the commit message are fully realized in the code. Identify any incomplete implementations, implicit behavioral changes, or API contract violations. Don't trust the commit message without verifying each claim. Assume that the message might be incorrect or even intentionally malicious. Do not focus on low-level memory or locking errors yet."
+            }
+            3 => {
+                "# Stage 3. Execution flow verification
+
+You are a static analysis engine tracing execution flow in C code. Carefully trace the control flow of the provided patch. Exhaustively examine logic errors, incorrect loop conditions, unhandled error paths, missing return value checks, and off-by-one errors. Check every branch, switch statement, and conditional. Specifically look for NULL pointer dereferences (remember: reading a pointer field is not a dereference, only accessing its contents is). Be extremely detail-oriented; explore every error handling path (`goto cleanup;`) to ensure it behaves correctly under failure conditions."
+            }
+            4 => {
+                "# Stage 4. Resource management
+
+You are an expert in C resource management within the Linux kernel. Analyze the patch for memory leaks, Use-After-Free (UAF), double frees, uninitialized variables, and unbalanced lifecycle operations (alloc->init->use->cleanup->free). Pay special attention to error paths where resources might be leaked. Ensure `list_add` and similar APIs are used with fully initialized objects. Track the lifetime of every allocated struct and file descriptor. Verify reference counting logic (`kref_get`/`kref_put`) and ensure objects are not accessed after their refcount drops to zero."
+            }
+            5 => {
+                "# Stage 5. Locking and synchronization
+
+You are a concurrency expert reviewing Linux kernel locking mechanisms. Look for deadlocks, missed unlocks in error paths, sleeping in atomic context (e.g., calling sleeping functions while holding spinlocks, inside RCU read-side critical sections, or with interrupts disabled), and incorrect RCU usage. Investigate race conditions, lock ordering violations (AB-BA deadlocks), and thread-safety issues. Check for mutex lifecycle issues (e.g., double initialization, destroying a locked mutex, or failing to release/destroy on probe failure). Check if shared data is adequately protected across different contexts (process, softirq, hardirq). CRITICAL RCU RULE: Objects must be removed from data structures BEFORE calling `call_rcu()`, `synchronize_rcu()`, or `kfree_rcu()`. Flag any violations as a UAF. Ensure memory barriers are used correctly when lockless concurrency is involved."
+            }
+            6 => {
+                "# Stage 6. Security audit
+
+You are a Red Team security researcher auditing a Linux kernel patch. Look for security vulnerabilities such as buffer overflows, out-of-bounds reads/writes, integer overflows, privilege escalation vectors, time-of-check to time-of-use (TOCTOU) races, and information leaks (e.g., copying uninitialized kernel memory to user-space via `copy_to_user`). Scrutinize all points where untrusted user input reaches sensitive functions without validation. Ensure all length checks and bounds checks are robust against malicious input. Focus heavily on attack surfaces and data boundaries."
+            }
+            7 => {
+                "# Stage 7. Hardware engineer's review
+
+You are a hardware engineer reviewing device driver changes. If this patch touches driver or hardware-specific code, rigorously review register accesses, IRQ handling, DMA mapping/unmapping, memory barriers, and timing/delays. Look for missing `dma_wmb()`/`dma_rmb()` barriers, incorrect endianness conversions (`cpu_to_le32`), and unsafe DMA buffer allocations. Ensure the hardware state machine is handled correctly, especially during suspend/resume or device reset. If the patch is purely generic software logic (e.g., VFS, core networking), output an empty concerns list."
+            }
+            8 => {
+                "# Stage 8. Verification and severity estimation
+
+You are the lead reviewer consolidating feedback from multiple specialized analysts. You will be given a list of concerns generated by different review stages.
+1. Deduplicate identical or overlapping concerns.
+2. Validate each concern, prove the provided reasoning. Report all valid concerns as findings. If necessarily, use tools to gather additional material.
+3. CRITICAL RULE: To discard a concern as a false positive, you MUST find concrete proof in the source code (e.g., a check in the caller function, a subsystem guarantee, or an initialization you can actually see) that explicitly invalidates the concern's reasoning. Do not dismiss a concern simply because you assume the original author knew what they were doing or that 'some caller probably handles it'. If you cannot find definitive proof that the concern is a false positive, it must be reported as a finding.
+4. If context from subsequent patches in the series is provided, check if the concern is fixed later in the series. If so, discard it. But don't trust any promises in the commit message if they can't be verified (e.g. something will be fixed by subsequent patches in the series - if you can't prove that it's indeed fixed, report it as a bug).
+5. Assign a severity (low, medium, high, critical) to each remaining valid finding and explain the reasoning. Be rigorous in filtering out verifiable noise, but accurately report real logic flaws and edge cases."
+            }
+            9 => {
+                "# Stage 9. LKML-friendly report generation
+
+You are an automated review bot generating a report for the Linux Kernel Mailing List (LKML). Convert the provided JSON findings into a polite, standard, inline-commented LKML email reply. Follow the formatting rules strictly. Do not use markdown headers or ALL CAPS shouting. Ensure the tone is constructive and professional."
+            }
+            10 => {
+                "# Stage 10. Fix generation
+
+You are an expert kernel developer writing patches to fix bugs found during review. Generate git-formatted patches to address the provided findings. Ensure the code conforms to kernel style guidelines and compiles cleanly mentally. Double-check that your fixes do not introduce new regressions."
+            }
+            _ => "",
         };
 
-        let mut prompt = format!("{}\n\n{}", trigger, OUTPUT_FORMAT_INSTRUCTION);
-
-        if let Some(range) = series_range {
-            prompt.push_str(&format!(
-                "\n\nImportant: Check every finding on being present at the end of the series. Use the `git_checkout` tool to check out the desired commit. If the bug was fixed within the series (range: {}), it should not be reported in the final report. Do not skip this check!",
-                range
-            ));
+        if !stage_instruction.is_empty() {
+            content.push_str(stage_instruction);
+            clean.push_str(stage_instruction);
+            content.push_str("\n\n");
+            clean.push_str("\n\n");
         }
 
-        Ok(prompt)
+        match stage {
+            3 => {
+                self.append_file(&mut content, &mut clean_files, "callstack.md")
+                    .await?;
+            }
+            4 => {
+                self.append_file(&mut content, &mut clean_files, "pointer-guards.md")
+                    .await?;
+            }
+            8 => {
+                self.append_file(&mut content, &mut clean_files, "false-positive-guide.md")
+                    .await?;
+                self.append_file(&mut content, &mut clean_files, "severity.md")
+                    .await?;
+            }
+            9 => {
+                self.append_file(&mut content, &mut clean_files, "inline-template.md")
+                    .await?;
+            }
+            _ => {}
+        }
+        if !clean_files.is_empty() {
+            clean.push_str(&clean_files.join(", "));
+            clean.push_str("\n\n");
+        }
+        Ok((content, clean))
     }
 
-    async fn append_file(&self, buffer: &mut String, filename: &str) -> Result<()> {
+    async fn append_file(
+        &self,
+        buffer: &mut String,
+        clean: &mut Vec<String>,
+        filename: &str,
+    ) -> Result<()> {
         let path = self.base_dir.join(filename);
         if path.exists() {
             buffer.push_str(&format!("# {}\n", filename));
@@ -156,11 +244,19 @@ impl PromptRegistry {
                     .with_context(|| format!("Failed to read {}", filename))?,
             );
             buffer.push_str("\n\n");
+
+            clean.push(format!("@{}", filename));
         }
         Ok(())
     }
 
-    async fn append_directory<F>(&self, buffer: &mut String, dir: &Path, filter: F) -> Result<()>
+    async fn append_directory<F>(
+        &self,
+        buffer: &mut String,
+        clean: &mut Vec<String>,
+        dir: &Path,
+        filter: F,
+    ) -> Result<()>
     where
         F: Fn(&str) -> bool,
     {
@@ -189,6 +285,8 @@ impl PromptRegistry {
             buffer.push_str(&format!("## {}\n", header));
             buffer.push_str(&fs::read_to_string(&path).await?);
             buffer.push_str("\n\n");
+
+            clean.push(format!("@{}", name));
         }
         Ok(())
     }
@@ -209,209 +307,660 @@ impl PromptRegistry {
     }
 }
 
+pub struct Worker {
+    provider: Arc<dyn AiProvider>,
+    tools: ToolBox,
+    prompts: PromptRegistry,
+    global_history: Vec<AiMessage>,
+    max_interactions: usize,
+    temperature: f32,
+}
+
+impl Worker {
+    pub fn new(
+        provider: Arc<dyn AiProvider>,
+        tools: ToolBox,
+        prompts: PromptRegistry,
+        config: WorkerConfig,
+    ) -> Self {
+        Self {
+            provider,
+            tools,
+            prompts,
+            global_history: Vec::new(),
+            max_interactions: config.max_interactions,
+            temperature: config.temperature,
+        }
+    }
+
+    pub async fn run(&mut self, patchset: Value) -> Result<WorkerResult> {
+        // 1. Extract inputs
+        let mut target_commit_diff = String::new();
+
+        if let Some(patches) = patchset["patches"].as_array() {
+            for p in patches {
+                if let Some(show) = p["git_show"].as_str() {
+                    target_commit_diff.push_str(show);
+                    target_commit_diff.push('\n');
+                } else if let Some(diff) = p["diff"].as_str() {
+                    target_commit_diff.push_str(diff);
+                    target_commit_diff.push('\n');
+                }
+            }
+        }
+
+        let mut all_concerns = Vec::new();
+        let mut total_tokens_in = 0;
+        let mut total_tokens_out = 0;
+        let mut total_tokens_cached = 0;
+
+        let (mut shared_context, mut clean_shared_context) = self.prompts.build_context().await?;
+
+        shared_context.push_str("\n\nTarget Commit:\n");
+        shared_context.push_str(&target_commit_diff);
+
+        clean_shared_context.push_str("\n\nTarget Commit:\n");
+        clean_shared_context.push_str(&target_commit_diff);
+
+        // Prefetch AST context based on the diff
+        let worktree_path = self.tools.get_worktree_path();
+        if let Ok((prefetched, _prefetch_summary)) =
+            crate::worker::prefetch::prefetch_context(worktree_path, &target_commit_diff).await
+            && !prefetched.is_empty()
+        {
+            shared_context.push_str("\n\n<pre_fetched_context>\n");
+            shared_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+            shared_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+            shared_context.push_str(&prefetched);
+            shared_context.push_str("\n</pre_fetched_context>\n");
+
+            clean_shared_context.push_str("\n\n<pre_fetched_context>\n");
+            clean_shared_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+            clean_shared_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+            clean_shared_context.push_str("{{prefetched_context}}\n</pre_fetched_context>\n");
+        }
+
+        // Stages 1-7
+        for stage in 1..=7 {
+            info!("Running Stage {}", stage);
+            let (stage_prompt, clean_stage_prompt) = self.prompts.get_stage_prompt(stage).await?;
+            let system_prompt = shared_context.clone();
+            let clean_system_prompt = clean_shared_context.clone();
+
+            let format_guidance = r#"Once you have gathered sufficient information, return ONLY a JSON object with a "concerns" array.
+If you find no concerns, return `{"concerns": []}`.
+If you find concerns, each must be an object with:
+- "type": A short category string.
+- "description": A clear description of the problem.
+- "reasoning": A step-by-step explanation.
+
+CRITICAL REVIEW DIRECTIVE: Do NOT dismiss concerns just because you assume the surrounding system or caller handles it perfectly. Do not be overly charitable to the existing code. If there is a missing initialization, an unhandled edge case, or a brittle logic flow, report it as a concern immediately. Assume the worst-case scenario where external inputs and caller states are malformed.
+
+Example:
+```json
+{
+  "concerns": [
+    {
+      "type": "Issue Category",
+      "description": "What is wrong.",
+      "reasoning": "Why it is wrong."
+    }
+  ]
+}
+```"#;
+            let user_prompt = format!("{}\n\n{}", stage_prompt, format_guidance);
+            let clean_user_prompt = format!("{}\n\n{}", clean_stage_prompt, format_guidance);
+            match self
+                .run_ai_stage(
+                    stage,
+                    system_prompt,
+                    clean_system_prompt,
+                    user_prompt,
+                    clean_user_prompt,
+                )
+                .await
+            {
+                Ok((result_json, t_in, t_out, t_cached)) => {
+                    total_tokens_in += t_in;
+                    total_tokens_out += t_out;
+                    total_tokens_cached += t_cached;
+
+                    if let Some(concerns) = result_json.get("concerns").and_then(|c| c.as_array()) {
+                        for c in concerns {
+                            if c.is_object() {
+                                all_concerns.push(c.clone());
+                            } else if let Some(s) = c.as_str() {
+                                all_concerns.push(serde_json::json!({
+                                    "type": "General",
+                                    "description": s
+                                }));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!("Stage {} failed: {}", stage, e);
+                }
+            }
+        }
+
+        if all_concerns.is_empty() {
+            tracing::info!("No concerns from stages 1-7, skipping stages 8 and 9");
+            let final_output = serde_json::json!({
+                "findings": [],
+                "review_inline": "No issues found.",
+                "fixes": ""
+            });
+            return Ok(WorkerResult {
+                output: Some(final_output),
+                error: None,
+                input_context: "Multi-stage execution completed".to_string(),
+                history: self.global_history.clone(),
+                history_before_pruning: self.global_history.clone(),
+                history_after_pruning: self.global_history.clone(),
+                tokens_in: total_tokens_in,
+                tokens_out: total_tokens_out,
+                tokens_cached: total_tokens_cached,
+            });
+        }
+
+        // Stage 8
+        info!("Running Stage 8");
+        let mut findings_json = Value::Array(Vec::new());
+        {
+            let stage = 8;
+            let (stage_prompt, clean_stage_prompt) = self.prompts.get_stage_prompt(stage).await?;
+            let system_prompt = shared_context.clone();
+            let clean_system_prompt = clean_shared_context.clone();
+            let full_series_context = "Full series context placeholder";
+            let aggregated_concerns_json =
+                serde_json::to_string_pretty(&all_concerns).unwrap_or_default();
+            let user_prompt = format!(
+                "{}\n\nCRITICAL REVIEW DIRECTIVE: To dismiss a concern as a false positive, you must find concrete evidence in the code that proves the concern is invalid (e.g., verifying the caller handles the edge case). If you cannot find concrete proof of safety, you must retain the concern.\n\nFull Series Context:\n{}\n\nAggregated Concerns:\n{}\n\nReturn ONLY a JSON object with a 'findings' array. Each object in the 'findings' array MUST use exactly the following keys: \"problem\" (a string containing the vulnerability description), \"severity\" (a string: Low, Medium, High, or Critical), \"severity_explanation\" (a string detailing the reasoning and proof).\n\nExample Output:\n```json\n{{\n  \"findings\": [\n    {{\n      \"problem\": \"Memory leak in function X when condition Y is met.\",\n      \"severity\": \"High\",\n      \"severity_explanation\": \"1. Condition Y is met.\\\n2. The buffer is allocated but not freed before return.\"\n    }}\n  ]\n}}\n```",
+                stage_prompt, full_series_context, aggregated_concerns_json
+            );
+            let clean_user_prompt = format!(
+                "{}\n\nCRITICAL REVIEW DIRECTIVE: To dismiss a concern as a false positive, you must find concrete evidence in the code that proves the concern is invalid (e.g., verifying the caller handles the edge case). If you cannot find concrete proof of safety, you must retain the concern.\n\nFull Series Context:\n{{{{series context}}}}\n\nAggregated Concerns:\n{}\n\nReturn ONLY a JSON object with a 'findings' array. Each object in the 'findings' array MUST use exactly the following keys: \"problem\" (a string containing the vulnerability description), \"severity\" (a string: Low, Medium, High, or Critical), \"severity_explanation\" (a string detailing the reasoning and proof).\n\nExample Output:\n```json\n{{\n  \"findings\": [\n    {{\n      \"problem\": \"Memory leak in function X when condition Y is met.\",\n      \"severity\": \"High\",\n      \"severity_explanation\": \"1. Condition Y is met.\\\n2. The buffer is allocated but not freed before return.\"\n    }}\n  ]\n}}\n```",
+                clean_stage_prompt, aggregated_concerns_json
+            );
+            if let Ok((result_json, t_in, t_out, t_cached)) = self
+                .run_ai_stage(
+                    stage,
+                    system_prompt,
+                    clean_system_prompt,
+                    user_prompt,
+                    clean_user_prompt,
+                )
+                .await
+            {
+                total_tokens_in += t_in;
+                total_tokens_out += t_out;
+                total_tokens_cached += t_cached;
+
+                if let Some(f) = result_json.get("findings") {
+                    findings_json = f.clone();
+                }
+            }
+        }
+
+        if let Some(f) = findings_json.as_array()
+            && f.is_empty()
+        {
+            tracing::info!("No findings from Stage 8, skipping Stage 9");
+            let final_output = serde_json::json!({
+                "findings": findings_json,
+                "review_inline": "No issues found.",
+                "fixes": ""
+            });
+            return Ok(WorkerResult {
+                output: Some(final_output),
+                error: None,
+                input_context: "Multi-stage execution completed".to_string(),
+                history: self.global_history.clone(),
+                history_before_pruning: self.global_history.clone(),
+                history_after_pruning: self.global_history.clone(),
+                tokens_in: total_tokens_in,
+                tokens_out: total_tokens_out,
+                tokens_cached: total_tokens_cached,
+            });
+        }
+
+        // Stage 9
+        info!("Running Stage 9");
+        let mut review_inline_text = String::new();
+        {
+            let stage = 9;
+            let (stage_prompt, clean_stage_prompt) = self.prompts.get_stage_prompt(stage).await?;
+            let system_prompt = shared_context.clone();
+            let clean_system_prompt = clean_shared_context.clone();
+            let findings_str = serde_json::to_string_pretty(&findings_json).unwrap_or_default();
+            let user_prompt = format!(
+                "{}\n\nFindings:\n{}\n\nReturn raw text output, not JSON.",
+                stage_prompt, findings_str
+            );
+            let clean_user_prompt = format!(
+                "{}\n\nFindings:\n{}\n\nReturn raw text output, not JSON.",
+                clean_stage_prompt, findings_str
+            );
+            let mut retries = 0;
+            while retries < 3 {
+                if let Ok((result_text, t_in, t_out, t_cached)) = self
+                    .run_ai_stage_raw(
+                        stage,
+                        system_prompt.clone(),
+                        clean_system_prompt.clone(),
+                        user_prompt.clone(),
+                        clean_user_prompt.clone(),
+                    )
+                    .await
+                {
+                    total_tokens_in += t_in;
+                    total_tokens_out += t_out;
+                    total_tokens_cached += t_cached;
+
+                    review_inline_text = result_text.clone();
+                    if !result_text.trim().starts_with("```") && !result_text.contains("```json") {
+                        break;
+                    } else {
+                        tracing::warn!(
+                            "Stage 9 output contained markdown code blocks or JSON, retrying..."
+                        );
+                    }
+                }
+                retries += 1;
+            }
+        }
+
+        let fixes_text = String::new();
+        /*         // Stage 10
+        info!("Running Stage 10");
+
+        {
+            let stage = 10;
+            let (stage_prompt, clean_stage_prompt) = self.prompts.get_stage_prompt(stage).await?;
+            let system_prompt = shared_context.clone();
+            let clean_system_prompt = clean_shared_context.clone();
+            let findings_str = serde_json::to_string_pretty(&findings_json).unwrap_or_default();
+            let user_prompt = format!(
+                "{}\n\nFindings:\n{}\n\nReturn raw text containing git-formatted patches.",
+                stage_prompt, findings_str
+            );
+            let clean_user_prompt = format!(
+                "{}\n\nFindings:\n{}\n\nReturn raw text containing git-formatted patches.",
+                clean_stage_prompt, findings_str
+            );
+            if let Ok((result_text, t_in, t_out, t_cached)) = self
+                .run_ai_stage_raw(stage, system_prompt, clean_system_prompt, user_prompt, clean_user_prompt)
+                .await
+            {
+                total_tokens_in += t_in;
+                total_tokens_out += t_out;
+                total_tokens_cached += t_cached;
+                fixes_text = result_text;
+            }
+        } */
+
+        let final_output = json!({
+            "findings": findings_json,
+            "review_inline": review_inline_text,
+            "fixes": fixes_text
+        });
+
+        Ok(WorkerResult {
+            output: Some(final_output),
+            error: None,
+            input_context: "Multi-stage execution completed".to_string(),
+            history: self.global_history.clone(),
+            history_before_pruning: self.global_history.clone(),
+            history_after_pruning: self.global_history.clone(),
+            tokens_in: total_tokens_in,
+            tokens_out: total_tokens_out,
+            tokens_cached: total_tokens_cached,
+        })
+    }
+
+    async fn run_ai_stage(
+        &mut self,
+        stage: u8,
+        system_prompt: String,
+        clean_system_prompt: String,
+        user_prompt: String,
+        clean_user_prompt: String,
+    ) -> Result<(Value, u32, u32, u32)> {
+        let (raw_text, t_in, t_out, t_cached) = self
+            .run_ai_stage_raw(
+                stage,
+                system_prompt,
+                clean_system_prompt,
+                user_prompt,
+                clean_user_prompt,
+            )
+            .await?;
+        let cleaned = crate::utils::clean_json_string(&raw_text);
+        let parsed: Value = serde_json::from_str(&cleaned).unwrap_or_else(|_| {
+            let cands = find_json_candidates(&raw_text);
+            cands.into_iter().last().unwrap_or(json!({}))
+        });
+        Ok((parsed, t_in, t_out, t_cached))
+    }
+
+    async fn run_ai_stage_raw(
+        &mut self,
+        _stage: u8,
+        system_prompt: String,
+        clean_system_prompt: String,
+        user_prompt: String,
+        clean_user_prompt: String,
+    ) -> Result<(String, u32, u32, u32)> {
+        let mut local_history = Vec::new();
+
+        let sys_msg = AiMessage {
+            role: AiRole::System,
+            content: Some(system_prompt.clone()),
+            thought: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let clean_sys_msg = AiMessage {
+            role: AiRole::System,
+            content: Some(clean_system_prompt),
+            thought: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        let user_msg = AiMessage {
+            role: AiRole::User,
+            content: Some(user_prompt.clone()),
+            thought: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        local_history.push(user_msg.clone());
+
+        if self.global_history.is_empty() {
+            self.global_history.push(clean_sys_msg);
+        }
+        self.global_history.push(AiMessage {
+            role: AiRole::User,
+            content: Some(clean_user_prompt),
+            thought: None,
+            tool_calls: None,
+            tool_call_id: None,
+        });
+
+        let mut turns = 0;
+        let mut t_in = 0;
+        let mut t_out = 0;
+        let mut t_cached = 0;
+
+        loop {
+            turns += 1;
+            if turns > self.max_interactions {
+                break;
+            }
+
+            let request = crate::ai::AiRequest {
+                system: None,
+                messages: {
+                    let mut m = vec![sys_msg.clone()];
+                    m.extend(local_history.clone());
+                    m
+                },
+                tools: Some(self.tools.get_declarations_generic()),
+                temperature: Some(self.temperature),
+                preloaded_context: None, // Caching disabled
+                response_format: None,
+            };
+
+            let resp = self.provider.generate_content(request).await?;
+
+            if let Some(usage) = &resp.usage {
+                t_in += usage.prompt_tokens as u32;
+                t_out += usage.completion_tokens as u32;
+                t_cached += usage.cached_tokens.unwrap_or(0) as u32;
+            }
+
+            let assistant_msg = AiMessage {
+                role: AiRole::Assistant,
+                content: resp.content.clone(),
+                thought: resp.thought.clone(),
+                tool_calls: resp.tool_calls.clone(),
+                tool_call_id: None,
+            };
+            local_history.push(assistant_msg.clone());
+            self.global_history.push(assistant_msg);
+
+            if let Some(tool_calls) = resp.tool_calls {
+                let mut tool_responses = Vec::new();
+                for call in tool_calls {
+                    let result = match self
+                        .tools
+                        .call(&call.function_name, call.arguments.clone())
+                        .await
+                    {
+                        Ok(v) => v.to_string(),
+                        Err(e) => json!({"error": e.to_string()}).to_string(),
+                    };
+                    tool_responses.push(AiMessage {
+                        role: AiRole::Tool,
+                        content: Some(result),
+                        thought: None,
+                        tool_calls: None,
+                        tool_call_id: Some(call.id.clone()),
+                    });
+                }
+                local_history.extend(tool_responses.clone());
+                self.global_history.extend(tool_responses);
+            } else if let Some(content) = resp.content {
+                return Ok((content, t_in, t_out, t_cached));
+            } else {
+                return Err(anyhow::anyhow!("No content or tool calls from AI"));
+            }
+        }
+
+        Err(anyhow::anyhow!("Max interactions exceeded"))
+    }
+}
+
+pub fn calculate_series_range(
+    patches: &[PatchInput],
+    patches_to_review: &[PatchInput],
+    patch_shas: &std::collections::HashMap<i64, String>,
+    baseline_sha: &str,
+) -> Option<String> {
+    if patches.is_empty() {
+        return None;
+    }
+
+    let max_patch_index = patches.iter().map(|p| p.index).max().unwrap_or(0);
+    let is_last_patch_review =
+        patches_to_review.len() == 1 && patches_to_review[0].index == max_patch_index;
+
+    if is_last_patch_review {
+        None
+    } else {
+        patches
+            .iter()
+            .map(|p| p.index)
+            .max()
+            .and_then(|max_idx| {
+                patches
+                    .iter()
+                    .find(|p| p.index == max_idx)
+                    .and_then(|p| p.commit_id.clone())
+                    .or_else(|| patch_shas.get(&max_idx).cloned())
+            })
+            .map(|end_sha| format!("{}..{}", baseline_sha, end_sha))
+    }
+}
+
+fn find_json_candidates(text: &str) -> Vec<Value> {
+    let mut candidates = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        if chars[i] == '{'
+            && let Some(end) = find_matching_brace(&chars, i)
+        {
+            let candidate: String = chars[i..=end].iter().collect();
+            let clean_candidate = crate::utils::clean_json_string(&candidate);
+            if let Ok(v) =
+                serde_json::from_str(&clean_candidate).or_else(|_| serde_json::from_str(&candidate))
+            {
+                candidates.push(v);
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    candidates
+}
+
+fn find_matching_brace(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut in_string = false;
+    let mut escape = false;
+
+    for (i, c) in chars.iter().enumerate().skip(start) {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if *c == '\\' {
+                escape = true;
+            } else if *c == '"' {
+                in_string = false;
+            }
+        } else if *c == '"' {
+            in_string = true;
+        } else if *c == '{' {
+            depth += 1;
+        } else if *c == '}' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_system_identity_constant() {
-        let identity = PromptRegistry::get_system_identity();
-        assert!(identity.starts_with("You're an expert Linux kernel developer"));
-        assert!(identity.contains("maintainer"));
+    fn test_calculate_series_range_single_patch() {
+        let p = PatchInput {
+            index: 1,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: Some("sha1".to_string()),
+        };
+        let patches = vec![p.clone()];
+        let patches_to_review = vec![p.clone()];
+        let patch_shas = std::collections::HashMap::new();
+
+        assert_eq!(
+            calculate_series_range(&patches, &patches_to_review, &patch_shas, "base"),
+            None
+        );
     }
 
     #[test]
-    fn test_content_hash_deterministic() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
+    fn test_calculate_series_range_multi_patch_last() {
+        let p1 = PatchInput {
+            index: 1,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: Some("sha1".to_string()),
+        };
+        let p2 = PatchInput {
+            index: 2,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: Some("sha2".to_string()),
+        };
+        let patches = vec![p1.clone(), p2.clone()];
+        let patches_to_review = vec![p2.clone()]; // Reviewing last
+        let patch_shas = std::collections::HashMap::new();
 
-        let content = "test content";
-        let hash1 = registry.calculate_content_hash::<()>(content, None);
-        let hash2 = registry.calculate_content_hash::<()>(content, None);
-
-        assert_eq!(hash1, hash2);
-        assert_eq!(hash1.len(), 64); // SHA256 hex is 64 chars
+        assert_eq!(
+            calculate_series_range(&patches, &patches_to_review, &patch_shas, "base"),
+            None
+        );
     }
 
     #[test]
-    fn test_content_hash_differs_with_tools() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
+    fn test_calculate_series_range_multi_patch_middle() {
+        let p1 = PatchInput {
+            index: 1,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: Some("sha1".to_string()),
+        };
+        let p2 = PatchInput {
+            index: 2,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: Some("sha2".to_string()),
+        };
+        let patches = vec![p1.clone(), p2.clone()];
+        let patches_to_review = vec![p1.clone()]; // Reviewing first
+        let patch_shas = std::collections::HashMap::new();
 
-        let content = "test content";
-        let tools = vec!["tool1", "tool2"];
-
-        let hash_no_tools = registry.calculate_content_hash::<()>(content, None);
-        let hash_with_tools = registry.calculate_content_hash(content, Some(&tools));
-
-        assert_ne!(hash_no_tools, hash_with_tools);
+        assert_eq!(
+            calculate_series_range(&patches, &patches_to_review, &patch_shas, "base"),
+            Some("base..sha2".to_string())
+        );
     }
 
-    #[tokio::test]
-    async fn test_build_context_includes_identity() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
+    #[test]
+    fn test_calculate_series_range_use_patch_shas_map() {
+        let p1 = PatchInput {
+            index: 1,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: None, // Missing in input
+        };
+        let p2 = PatchInput {
+            index: 2,
+            diff: "".to_string(),
+            subject: None,
+            author: None,
+            date: None,
+            message_id: None,
+            commit_id: None, // Missing in input
+        };
+        let patches = vec![p1.clone(), p2.clone()];
+        let patches_to_review = vec![p1.clone()];
 
-        let context = registry.build_context().await.unwrap();
-        assert!(context.starts_with(SYSTEM_IDENTITY));
-    }
+        let mut patch_shas = std::collections::HashMap::new();
+        patch_shas.insert(2, "sha2_resolved".to_string());
 
-    #[tokio::test]
-    async fn test_build_context_includes_core() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let core_content = "# Test Protocol\nThis is a test.";
-        std::fs::write(temp_dir.path().join("review-core.md"), core_content).unwrap();
-
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-        let context = registry.build_context().await.unwrap();
-
-        assert!(context.contains("# review-core.md"));
-        assert!(context.contains("# Test Protocol"));
-    }
-
-    #[tokio::test]
-    async fn test_build_context_excludes_readme_and_others() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp_dir.path().join("README.md"),
-            "# README\nDo not include",
-        )
-        .unwrap();
-        std::fs::write(
-            temp_dir.path().join("debugging.md"),
-            "# Debugging\nDo not include",
-        )
-        .unwrap();
-        std::fs::write(
-            temp_dir.path().join("subsystem.md"),
-            "# Subsystem\nInclude me",
-        )
-        .unwrap();
-
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-        let context = registry.build_context().await.unwrap();
-
-        assert!(!context.contains("Do not include"));
-        assert!(context.contains("Include me"));
-    }
-
-    #[tokio::test]
-    async fn test_user_task_prompt_cached() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-
-        let prompt = registry.get_user_task_prompt(true, None).await.unwrap();
-
-        // In cached mode, the prompt is minimal and relies on pre-loaded context.
-        assert!(!prompt.contains(SYSTEM_IDENTITY));
-        assert!(prompt.contains("Refer to the `# review-core.md` section"));
-        assert!(prompt.contains("Do NOT attempt to load any additional prompts"));
-    }
-
-    #[tokio::test]
-    async fn test_user_task_prompt_non_cached() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        std::fs::write(temp_dir.path().join("review-core.md"), "Protocol content").unwrap();
-
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-        let prompt = registry.get_user_task_prompt(false, None).await.unwrap();
-
-        assert!(!prompt.contains(SYSTEM_IDENTITY));
-        assert!(prompt.contains("Load the protocol from `review-core.md`"));
-        assert!(!prompt.contains("Refer to the protocol in the pre-loaded context"));
-        assert!(prompt.contains("Important: `review_inline` field"));
-    }
-
-    #[tokio::test]
-    async fn test_user_task_prompt_with_series_range() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-
-        let range = "base..head";
-        let prompt = registry
-            .get_user_task_prompt(true, Some(range.to_string()))
-            .await
-            .unwrap();
-
-        assert!(prompt.contains(range));
-        assert!(prompt.contains("Check every finding on being present at the end of the series"));
-    }
-
-    #[tokio::test]
-    async fn test_build_context_structure() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let root = temp_dir.path();
-
-        // 1. Root files (excluding ignored)
-        std::fs::write(root.join("root_sub.md"), "Root Content").unwrap();
-        std::fs::write(root.join("debugging.md"), "Ignored Debugging").unwrap();
-
-        // 2. Patterns directory
-        let patterns_dir = root.join("patterns");
-        std::fs::create_dir(&patterns_dir).unwrap();
-        std::fs::write(patterns_dir.join("pat1.md"), "Pattern Content").unwrap();
-
-        // 3. NFSD directory
-        let nfsd_dir = root.join("nfsd");
-        std::fs::create_dir(&nfsd_dir).unwrap();
-        std::fs::write(nfsd_dir.join("nfsd1.md"), "NFSD Content").unwrap();
-
-        // 4. Random subdirectory (should be ignored)
-        let other_dir = root.join("other_sub");
-        std::fs::create_dir(&other_dir).unwrap();
-        std::fs::write(other_dir.join("other.md"), "Ignored Subdir Content").unwrap();
-
-        let registry = PromptRegistry::new(root.to_path_buf());
-        let context = registry.build_context().await.unwrap();
-
-        // Verify inclusions
-        assert!(context.contains("Root Content"));
-        assert!(context.contains("## patterns/pat1.md"));
-        assert!(context.contains("Pattern Content"));
-        assert!(context.contains("## nfsd/nfsd1.md"));
-        assert!(context.contains("NFSD Content"));
-
-        // Verify exclusions
-        assert!(!context.contains("Ignored Debugging"));
-        assert!(!context.contains("Ignored Subdir Content"));
-    }
-
-    #[tokio::test]
-    async fn test_build_context_includes_inline_template_after_review_core() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let root = temp_dir.path();
-        std::fs::write(root.join("review-core.md"), "CORE CONTENT").unwrap();
-        std::fs::write(root.join("inline-template.md"), "TEMPLATE CONTENT").unwrap();
-        std::fs::write(root.join("technical-patterns.md"), "PATTERNS CONTENT").unwrap();
-
-        let registry = PromptRegistry::new(root.to_path_buf());
-        let context = registry.build_context().await.unwrap();
-
-        let core_idx = context.find("CORE CONTENT").unwrap();
-        let template_idx = context.find("TEMPLATE CONTENT").unwrap();
-        let patterns_idx = context.find("PATTERNS CONTENT").unwrap();
-
-        assert!(core_idx < template_idx);
-        assert!(template_idx < patterns_idx);
-    }
-
-    #[tokio::test]
-    async fn test_build_context_excludes_subsystem_template() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let subsystem_dir = temp_dir.path().join("subsystem");
-        std::fs::create_dir(&subsystem_dir).unwrap();
-
-        std::fs::write(subsystem_dir.join("real.md"), "Real Content").unwrap();
-        std::fs::write(
-            subsystem_dir.join("subsystem-template.md"),
-            "Template Content",
-        )
-        .unwrap();
-
-        let registry = PromptRegistry::new(temp_dir.path().to_path_buf());
-        let context = registry.build_context().await.unwrap();
-
-        assert!(context.contains("Real Content"));
-        assert!(!context.contains("Template Content"));
+        assert_eq!(
+            calculate_series_range(&patches, &patches_to_review, &patch_shas, "base"),
+            Some("base..sha2_resolved".to_string())
+        );
     }
 }
