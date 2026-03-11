@@ -106,7 +106,6 @@ impl GitWorktree {
             .env("GIT_COMMITTER_EMAIL", "sashiko@localhost")
             .args(["-c", "safe.bareRepository=all"])
             .arg("am")
-            .arg("--3way")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -146,7 +145,6 @@ impl GitWorktree {
             .current_dir(&self.path)
             .args(["-c", "safe.bareRepository=all"])
             .arg("apply")
-            .arg("--3way")
             .arg("-") // Read from stdin
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
