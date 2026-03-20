@@ -70,6 +70,11 @@ impl EmailRouter {
             }
         }
 
+        // Always append defaults.cc so users can define a global CC
+        for cr in &policy.defaults.cc {
+            cc.push(cr.clone());
+        }
+
         if mute_all {
             return Action::Mute;
         }
