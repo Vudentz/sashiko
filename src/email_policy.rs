@@ -11,8 +11,7 @@ pub struct EmailPolicyConfig {
     pub subsystems: HashMap<String, SubsystemPolicy>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[derive(Default)]
+#[derive(Deserialize, Debug, Clone, Default)]
 pub struct SubsystemPolicy {
     #[serde(default)]
     pub lists: Vec<String>,
