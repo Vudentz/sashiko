@@ -185,6 +185,9 @@ To start the daemon:
 ```bash
 cargo run
 ```
+
+(Or via Nix: `nix run github:sashiko-dev/sashiko`)
+
 ### 2. CLI
 
 The CLI allows you to interact with the running Sashiko daemon from your terminal.
@@ -194,6 +197,9 @@ To run the CLI:
 ```bash
 cargo run --bin sashiko-cli -- [COMMAND]
 ```
+
+(Or via Nix: Install `github:sashiko-dev/sashiko`, e.g. via `nix profile add`,
+then run `sashiko-cli [COMMAND]`)
 
 **Commands:**
 
