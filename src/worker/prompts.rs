@@ -254,10 +254,6 @@ You are an expert kernel developer writing patches to fix bugs found during revi
                 self.append_file(&mut content, &mut clean_files, "callstack.md")
                     .await?;
             }
-            4 => {
-                self.append_file(&mut content, &mut clean_files, "pointer-guards.md")
-                    .await?;
-            }
             8 => {
                 self.append_file(&mut content, &mut clean_files, "false-positive-guide.md")
                     .await?;
