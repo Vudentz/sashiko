@@ -390,6 +390,7 @@ impl Worker {
     pub async fn run(&mut self, patchset: Value) -> Result<WorkerResult> {
         // 1. Extract inputs
         let mut target_commit_diff = String::new();
+        let mut target_commit_diff_only = String::new();
 
         let ps_id = patchset["id"]
             .as_i64()
@@ -409,6 +410,11 @@ impl Worker {
                 } else if let Some(diff) = p["diff"].as_str() {
                     target_commit_diff.push_str(diff);
                     target_commit_diff.push('\n');
+                }
+
+                if let Some(diff) = p["diff"].as_str() {
+                    target_commit_diff_only.push_str(diff);
+                    target_commit_diff_only.push('\n');
                 }
             }
         }
@@ -525,28 +531,53 @@ impl Worker {
         dynamic_context.push_str(&target_commit_diff);
         let mut clean_dynamic_context = dynamic_context.clone();
 
+        let mut dynamic_context_no_log = String::new();
+        dynamic_context_no_log.push_str("\n\nTarget Commit Diff:\n");
+        dynamic_context_no_log.push_str(&target_commit_diff_only);
+        let mut clean_dynamic_context_no_log = dynamic_context_no_log.clone();
+
         // Prefetch AST context based on the diff
         let worktree_path = self.tools.get_worktree_path();
         if let Ok(prefetched) =
             crate::worker::prefetch::prefetch_context(worktree_path, &target_commit_diff).await
-            && !prefetched.is_empty()
         {
-            dynamic_context.push_str("\n\n<pre_fetched_context>\n");
-            dynamic_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
-            dynamic_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
-            dynamic_context.push_str(&prefetched);
-            dynamic_context.push_str("\n</pre_fetched_context>\n");
+            if !prefetched.is_empty() {
+                dynamic_context.push_str("\n\n<pre_fetched_context>\n");
+                dynamic_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+                dynamic_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+                dynamic_context.push_str(&prefetched);
+                dynamic_context.push_str("\n</pre_fetched_context>\n");
 
-            clean_dynamic_context.push_str("\n\n<pre_fetched_context>\n");
-            clean_dynamic_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
-            clean_dynamic_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
-            clean_dynamic_context.push_str("{{prefetched_context}}\n</pre_fetched_context>\n");
+                clean_dynamic_context.push_str("\n\n<pre_fetched_context>\n");
+                clean_dynamic_context.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+                clean_dynamic_context.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+                clean_dynamic_context.push_str("{{prefetched_context}}\n</pre_fetched_context>\n");
+
+                dynamic_context_no_log.push_str("\n\n<pre_fetched_context>\n");
+                dynamic_context_no_log.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+                dynamic_context_no_log.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+                dynamic_context_no_log.push_str(&prefetched);
+                dynamic_context_no_log.push_str("\n</pre_fetched_context>\n");
+
+                clean_dynamic_context_no_log.push_str("\n\n<pre_fetched_context>\n");
+                clean_dynamic_context_no_log.push_str("The following context was automatically pre-fetched based on the modified lines in the patch. It contains the full source code of the functions and structs modified by the diff AFTER applying the target patch.\n");
+                clean_dynamic_context_no_log.push_str("If it's not sufficient, you MUST use available tools to explore the source code. Don't make assumptions without actually looking into the relevant code.\n\n");
+                clean_dynamic_context_no_log
+                    .push_str("{{prefetched_context}}\n</pre_fetched_context>\n");
+            }
         }
         let (shared_context, clean_shared_context) = {
             // Without cache (or with implicit cache like Claude), we send everything.
             (
                 format!("{}{}", static_context, dynamic_context),
                 format!("{}{}", clean_static_context, clean_dynamic_context),
+            )
+        };
+
+        let (shared_context_no_log, clean_shared_context_no_log) = {
+            (
+                format!("{}{}", static_context, dynamic_context_no_log),
+                format!("{}{}", clean_static_context, clean_dynamic_context_no_log),
             )
         };
 
@@ -608,9 +639,10 @@ CRITICAL: Always err on the side of running more stages. If you are not absolute
                                 let mut stages = vec![1, 2, 3];
                                 for v in arr {
                                     if let Some(n) = v.as_u64()
-                                        && (4..=7).contains(&n) {
-                                            stages.push(n as u8);
-                                        }
+                                        && (4..=7).contains(&n)
+                                    {
+                                        stages.push(n as u8);
+                                    }
                                 }
                                 info!("Planning phase selected stages: {:?}", stages);
                                 planning_selected_stages = Some(stages);
@@ -639,15 +671,24 @@ CRITICAL: Always err on the side of running more stages. If you are not absolute
                     continue;
                 }
             } else if let Some(ref planned_stages) = planning_selected_stages
-                && !planned_stages.contains(&stage) {
-                    info!("Skipping stage {} based on planning phase", stage);
-                    continue;
-                }
+                && !planned_stages.contains(&stage)
+            {
+                info!("Skipping stage {} based on planning phase", stage);
+                continue;
+            }
 
             info!("Running Stage {}", stage);
             let (stage_prompt, clean_stage_prompt) = self.prompts.get_stage_prompt(stage).await?;
-            let system_prompt = shared_context.clone();
-            let clean_system_prompt = clean_shared_context.clone();
+            let system_prompt = if (3..=6).contains(&stage) {
+                shared_context_no_log.clone()
+            } else {
+                shared_context.clone()
+            };
+            let clean_system_prompt = if (3..=6).contains(&stage) {
+                clean_shared_context_no_log.clone()
+            } else {
+                clean_shared_context.clone()
+            };
 
             let format_guidance = r#"Once you have gathered sufficient information, return ONLY a JSON object with a "concerns" array.
 If you find no concerns, return `{"concerns": []}`.
