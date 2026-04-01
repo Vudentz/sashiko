@@ -37,6 +37,7 @@ pub struct SmtpSettings {
     pub username: Option<String>,
     pub password: Option<String>,
     pub sender_address: String,
+    pub reply_to: Option<String>,
     #[serde(default = "default_dry_run")]
     pub dry_run: bool,
 }

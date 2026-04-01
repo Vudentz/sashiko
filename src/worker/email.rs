@@ -74,6 +74,10 @@ impl EmailWorker {
             .from(self.settings.sender_address.parse()?)
             .subject(&email_row.subject);
 
+        if let Some(reply_to) = &self.settings.reply_to {
+            builder = builder.reply_to(reply_to.parse()?);
+        }
+
         let to_addresses: Vec<String> = serde_json::from_str(&email_row.to_addresses)?;
         for to in to_addresses {
             builder = builder.to(to.parse()?);
