@@ -537,6 +537,26 @@ impl Database {
         Ok(lists)
     }
 
+    pub async fn get_pending_review_id(
+        &self,
+        patchset_id: i64,
+        patch_id: Option<i64>,
+    ) -> Result<Option<i64>> {
+        let mut rows = match patch_id {
+            Some(pid) => {
+                self.conn.query("SELECT id FROM reviews WHERE patchset_id = ? AND patch_id = ? AND status = 'Pending' LIMIT 1", libsql::params![patchset_id, pid]).await?
+            }
+            None => {
+                self.conn.query("SELECT id FROM reviews WHERE patchset_id = ? AND patch_id IS NULL AND status = 'Pending' LIMIT 1", libsql::params![patchset_id]).await?
+            }
+        };
+        if let Ok(Some(row)) = rows.next().await {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
     pub async fn create_review(
         &self,
         patchset_id: i64,
@@ -2853,6 +2873,23 @@ impl Database {
         references_hdr: &str,
         body: &str,
     ) -> Result<()> {
+        // Prevent duplicate emails for the same patch
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT 1 FROM email_outbox WHERE patch_id = ?",
+                libsql::params![patch_id],
+            )
+            .await?;
+
+        if let Ok(Some(_)) = rows.next().await {
+            tracing::info!(
+                "Email outbox entry already exists for patch_id {}, skipping to prevent duplicates.",
+                patch_id
+            );
+            return Ok(());
+        }
+
         let created_at = chrono::Utc::now().timestamp();
         self.conn.execute(
             "INSERT INTO email_outbox (patch_id, status, to_addresses, cc_addresses, subject, in_reply_to, references_hdr, body, created_at)

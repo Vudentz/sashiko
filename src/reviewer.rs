@@ -335,8 +335,19 @@ impl Reviewer {
                 })
                 .collect();
 
+            let patchset_msg_id = patchset
+                .message_id
+                .clone()
+                .or_else(|| {
+                    patches_json
+                        .first()
+                        .and_then(|p| p["message_id"].as_str().map(|s| s.to_string()))
+                })
+                .unwrap_or_default();
+
             let input_payload = json!({
                 "id": patchset_id,
+                "message_id": patchset_msg_id,
                 "subject": patchset.subject.clone().unwrap_or("Unknown".to_string()),
                 "patches": patches_json
             });
@@ -899,6 +910,18 @@ impl Reviewer {
             return Ok(PatchResult::Success);
         }
 
+        if ctx
+            .db
+            .has_failed_review(patchset_id, patch_id, baseline_id)
+            .await?
+        {
+            info!(
+                "Patch {}/{} (ID: {}) already has a failed review. Skipping to keep it visible.",
+                patchset_id, index, patch_id
+            );
+            return Ok(PatchResult::ReviewFailed);
+        }
+
         let files = extract_files_from_diff(diff);
         if !files.is_empty()
             && files.iter().all(|f| {
@@ -914,17 +937,24 @@ impl Reviewer {
                 patchset_id, index, patch_id
             );
 
-            let review_id = ctx
+            let review_id = if let Some(id) = ctx
                 .db
-                .create_review(
-                    patchset_id,
-                    Some(patch_id),
-                    &ctx.settings.ai.provider,
-                    &ctx.settings.ai.model,
-                    baseline_id,
-                    prompts_hash,
-                )
-                .await?;
+                .get_pending_review_id(patchset_id, Some(patch_id))
+                .await?
+            {
+                id
+            } else {
+                ctx.db
+                    .create_review(
+                        patchset_id,
+                        Some(patch_id),
+                        &ctx.settings.ai.provider,
+                        &ctx.settings.ai.model,
+                        baseline_id,
+                        prompts_hash,
+                    )
+                    .await?
+            };
 
             let _ = ctx
                 .db
@@ -945,18 +975,26 @@ impl Reviewer {
         let mut retries = 0;
         let max_retries = ctx.settings.review.max_retries;
 
+        let mut existing_pending_review_id = ctx
+            .db
+            .get_pending_review_id(patchset_id, Some(patch_id))
+            .await?;
+
         loop {
-            let review_id = ctx
-                .db
-                .create_review(
-                    patchset_id,
-                    Some(patch_id),
-                    &ctx.settings.ai.provider,
-                    &ctx.settings.ai.model,
-                    baseline_id,
-                    prompts_hash,
-                )
-                .await?;
+            let review_id = if let Some(id) = existing_pending_review_id.take() {
+                id
+            } else {
+                ctx.db
+                    .create_review(
+                        patchset_id,
+                        Some(patch_id),
+                        &ctx.settings.ai.provider,
+                        &ctx.settings.ai.model,
+                        baseline_id,
+                        prompts_hash,
+                    )
+                    .await?
+            };
 
             let _ = ctx
                 .db
@@ -1105,10 +1143,8 @@ impl Reviewer {
                                     }
                                 }
 
-                                let summary = review_content["summary"]
-                                    .as_str()
-                                    .unwrap_or("No summary available.")
-                                    .to_string();
+                                let summary =
+                                    review_content["summary"].as_str().unwrap_or("").to_string();
                                 let result_desc = "Review completed successfully.";
 
                                 let inline_review = json_output["inline_review"].as_str();
@@ -1141,10 +1177,8 @@ impl Reviewer {
                                         input_payload,
                                         index,
                                         inline,
-                                        json_output["findings"]
-                                            .as_array()
-                                            .map(|a| a.len())
-                                            .unwrap_or(0),
+                                        review_content["findings"].as_array(),
+                                        &summary,
                                     )
                                     .await
                                 {
@@ -1634,7 +1668,8 @@ impl Reviewer {
         input_payload: &Value,
         index: i64,
         inline_review: &str,
-        findings_count: usize,
+        findings: Option<&Vec<Value>>,
+        _summary: &str,
     ) -> Result<()> {
         let sender_address = match &ctx.settings.smtp {
             Some(s) => s.sender_address.clone(),
@@ -1644,6 +1679,8 @@ impl Reviewer {
             }
         };
 
+        let findings_count = findings.map(|f| f.len()).unwrap_or(0);
+
         let patch_obj = input_payload["patches"]
             .as_array()
             .and_then(|arr| arr.iter().find(|p| p["index"] == index));
@@ -1652,6 +1689,9 @@ impl Reviewer {
             Some(m) => m,
             None => return Ok(()),
         };
+
+        let patchset_msg_id = input_payload["message_id"].as_str().unwrap_or(msg_id);
+        let patchset_msg_id_clean = patchset_msg_id.trim_matches(|c| c == '<' || c == '>');
 
         let msg_details = match ctx.db.get_message_details_by_msgid(msg_id).await? {
             Some(d) => d,
@@ -1682,7 +1722,10 @@ impl Reviewer {
         let patch_author = msg_details.author.unwrap_or_default();
         let patch_subject = msg_details.subject.unwrap_or_default();
 
-        let target_url = format!("https://sashiko.dev/patch/{}", patch_id);
+        let target_url = format!(
+            "https://sashiko.dev/#/patchset/{}?part={}",
+            patchset_msg_id_clean, index
+        );
 
         let patchwork_policies =
             crate::email_router::EmailRouter::resolve_patchwork(&policy, &to_list, &cc_list);
@@ -1693,7 +1736,10 @@ impl Reviewer {
             "success"
         };
         let patchwork_desc = if findings_count > 0 {
-            format!("Sashiko AI review found {} issue(s)", findings_count)
+            format!(
+                "Sashiko AI review found {} potential issue(s)",
+                findings_count
+            )
         } else {
             "Sashiko AI review found no regressions".to_string()
         };
@@ -1713,6 +1759,11 @@ impl Reviewer {
                 )
                 .await;
             });
+        }
+
+        if findings_count == 0 {
+            info!("No issues found for patch {}, skipping email.", patch_id);
+            return Ok(());
         }
 
         let action = EmailRouter::resolve_recipients(
@@ -1738,17 +1789,48 @@ impl Reviewer {
                 };
                 let final_subject = format!("{}{}", subject_prefix, patch_subject);
 
-                let footer = format!(
-                    "\n\n-- \n\
-                    Sashiko AI review. Please fix the issues or reply to explain why they are incorrect.\n\
-                    If this review was helpful, please consider adding:\n\
-                    Assisted-by: Sashiko ({})\n\n\
-                    View online: https://sashiko.dev/patch/{}",
-                    ctx.settings.ai.model, patch_id
-                );
-
-                let final_body = format!("{}{}", inline_review, footer);
                 let msg_id_clean = msg_id.trim_matches(|c| c == '<' || c == '>');
+
+                let mut header = String::new();
+
+                if let Some(findings_arr) = findings
+                    && !findings_arr.is_empty()
+                {
+                    header.push_str(&format!(
+                        "Sashiko AI review found {} potential issue(s):\n",
+                        findings_arr.len()
+                    ));
+
+                    let mut sorted_findings = findings_arr.to_vec();
+                    sorted_findings.sort_by(|a, b| {
+                        let sev_a = Severity::from_str(
+                            a.get("severity").and_then(|v| v.as_str()).unwrap_or("Low"),
+                        );
+                        let sev_b = Severity::from_str(
+                            b.get("severity").and_then(|v| v.as_str()).unwrap_or("Low"),
+                        );
+                        sev_b.cmp(&sev_a)
+                    });
+
+                    for f in sorted_findings {
+                        let problem = f
+                            .get("problem")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown issue");
+                        let severity = f
+                            .get("severity")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("Unknown");
+                        header.push_str(&format!("- [{}] {}\n", severity, problem));
+                    }
+                    header.push_str("\n--\n\n");
+                }
+
+                let mut footer = String::new();
+
+                footer.push_str(&format!("\n\n-- \nSashiko AI review · {}", target_url));
+
+                let final_body = format!("{}{}{}", header, inline_review, footer);
 
                 let status = match &ctx.settings.smtp {
                     None => "Disabled",

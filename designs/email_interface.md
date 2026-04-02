@@ -70,14 +70,9 @@ mute_all = true
 ```text
 {lkml_formatted_ai_review}
 
--- 
-Sashiko AI review. Please fix the issues or reply to explain why they are incorrect.
-If this review was helpful, please consider adding:
-Assisted-by: Sashiko ({llm_model_name})
-
-View online: https://sashiko.dev/patch/{patch_id}
+--
+Sashiko AI review · https://sashiko.dev/patch/{msg_id}
 ```
-
 ## 7. UI / CLI Visibility
 *   **State Machine:** Patches will transition through: `Ingested` -> `Reviewing` -> `Reviewed` -> `Email Pending` -> `Email Sent` (or `Email Skipped`).
 *   **Logs/Output:** The frontend and CLI will explicitly display the delivery status alongside the exact `To` and `Cc` arrays so developers have full transparency into the bot's communication.
