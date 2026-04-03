@@ -1,0 +1,62 @@
+# Example workflow: Sashiko AI Code Review for Pull Requests
+#
+# Add this to your repository as .github/workflows/sashiko-review.yml
+# to enable automated AI code review on pull requests.
+#
+# Required secrets:
+#   - AI_API_KEY: API key for your chosen AI provider
+#
+# Optional: Customize the AI provider and model via workflow inputs.
+
+name: Sashiko Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Uncomment to also review issues with code references:
+  # issues:
+  #   types: [opened, edited]
+
+# Cancel in-progress reviews when a new commit is pushed
+concurrency:
+  group: sashiko-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    name: AI Code Review
+    runs-on: ubuntu-latest
+    # Skip drafts and bot PRs
+    if: >
+      github.event.pull_request.draft != true &&
+      github.actor != 'dependabot[bot]'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history for baseline resolution
+          fetch-depth: 0
+
+      - name: Run Sashiko Review
+        uses: sashiko-dev/sashiko@main
+        id: review
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          ai_provider: 'gemini'
+          ai_model: 'gemini-3.1-pro-preview'
+          ai_api_key: ${{ secrets.AI_API_KEY }}
+          severity_threshold: 'low'
+          # custom_prompt: 'Focus on security and performance issues.'
+          # prompts_path: '.sashiko/prompts'
+
+      - name: Review Summary
+        if: always()
+        run: |
+          echo "Review status: ${{ steps.review.outputs.status }}"
+          echo "Findings: ${{ steps.review.outputs.findings_count }}"
+          echo "Max severity: ${{ steps.review.outputs.max_severity }}"

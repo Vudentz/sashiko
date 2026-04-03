@@ -1,0 +1,83 @@
+name: 'Sashiko Code Review'
+description: 'AI-powered code review for pull requests, inspired by Japanese reinforcement stitching'
+author: 'The Sashiko Authors'
+
+branding:
+  icon: 'eye'
+  color: 'blue'
+
+inputs:
+  github_token:
+    description: 'GitHub token for API access (defaults to the automatic GITHUB_TOKEN)'
+    required: false
+    default: ${{ github.token }}
+  ai_provider:
+    description: 'AI provider to use: gemini, claude, bedrock, openai-compat'
+    required: true
+    default: 'gemini'
+  ai_model:
+    description: 'AI model to use (e.g. gemini-3.1-pro-preview, claude-sonnet-4-6)'
+    required: true
+    default: 'gemini-3.1-pro-preview'
+  ai_api_key:
+    description: 'API key for the AI provider (GEMINI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY)'
+    required: true
+  max_input_tokens:
+    description: 'Maximum input tokens for the AI model'
+    required: false
+    default: '900000'
+  max_interactions:
+    description: 'Maximum AI interaction turns per review'
+    required: false
+    default: '50'
+  review_comment_tag:
+    description: 'Tag to identify sashiko comments (for updating existing reviews)'
+    required: false
+    default: '<!-- sashiko-review -->'
+  severity_threshold:
+    description: 'Minimum severity to report: info, low, medium, high, critical'
+    required: false
+    default: 'low'
+  custom_prompt:
+    description: 'Custom instructions to append to the review prompt'
+    required: false
+    default: ''
+  post_review:
+    description: 'Whether to post the review as PR comments (true/false)'
+    required: false
+    default: 'true'
+  review_on_issues:
+    description: 'Whether to analyze issues that reference code (true/false)'
+    required: false
+    default: 'false'
+  prompts_path:
+    description: 'Path to custom review prompts directory (relative to repo root)'
+    required: false
+    default: ''
+
+outputs:
+  review_body:
+    description: 'The full review body as markdown'
+  findings_count:
+    description: 'Number of findings'
+  max_severity:
+    description: 'Highest severity found'
+  status:
+    description: 'Review status: success, no_findings, error'
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile.action'
+  env:
+    GITHUB_TOKEN: ${{ inputs.github_token }}
+    INPUT_AI_PROVIDER: ${{ inputs.ai_provider }}
+    INPUT_AI_MODEL: ${{ inputs.ai_model }}
+    INPUT_AI_API_KEY: ${{ inputs.ai_api_key }}
+    INPUT_MAX_INPUT_TOKENS: ${{ inputs.max_input_tokens }}
+    INPUT_MAX_INTERACTIONS: ${{ inputs.max_interactions }}
+    INPUT_REVIEW_COMMENT_TAG: ${{ inputs.review_comment_tag }}
+    INPUT_SEVERITY_THRESHOLD: ${{ inputs.severity_threshold }}
+    INPUT_CUSTOM_PROMPT: ${{ inputs.custom_prompt }}
+    INPUT_POST_REVIEW: ${{ inputs.post_review }}
+    INPUT_REVIEW_ON_ISSUES: ${{ inputs.review_on_issues }}
+    INPUT_PROMPTS_PATH: ${{ inputs.prompts_path }}
