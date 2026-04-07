@@ -19,3 +19,8 @@ cc = []
 lists = ["linux-hwmon@vger.kernel.org"]
 reply_to_author = true
 cc = ["linux-hwmon@vger.kernel.org"]
+
+[subsystems.perf]
+lists = ["linux-perf-users@vger.kernel.org"]
+reply_to_author = true
+cc = ["linux-perf-users@vger.kernel.org"]
