@@ -1969,7 +1969,7 @@
         // BASELINE LOG VIEW
         // =====================================================================
         async function renderBaselineLogView(id, idx) {
-            const res = await fetch(`/api/patch?id=${encodeURIComponent(id)}`);
+            const res = await fetch(`/api/patchset?id=${encodeURIComponent(id)}`);
             if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
             const data = await res.json();
 
@@ -2813,3 +2813,4 @@ ${escapeHtml((data.body || '(no body)').replace(/\n+$/, ''), true, false)}${data
 </body>
 
 </html>
+

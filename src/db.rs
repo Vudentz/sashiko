@@ -2507,6 +2507,250 @@ impl Database {
         }
     }
 
+    pub async fn get_patchset_summary(
+        &self,
+        id: i64,
+        page: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Option<serde_json::Value>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT p.id, p.subject, p.status, p.to_recipients, p.cc_recipients,
+                    p.author, p.date, p.cover_letter_message_id, p.thread_id,
+                    p.total_parts, p.received_parts, p.failed_reason,
+                    p.model_name, p.prompts_git_hash, p.baseline_logs, p.baseline_id, p.provider
+                FROM patchsets p
+                WHERE p.id = ?",
+                libsql::params![id],
+            )
+            .await?;
+
+        if let Ok(Some(row)) = rows.next().await {
+            let pid: i64 = row.get(0)?;
+            let subject: Option<String> = row.get(1).ok();
+            let status: Option<String> = row.get(2).ok();
+            let to: Option<String> = row.get(3).ok();
+            let cc: Option<String> = row.get(4).ok();
+            let author: Option<String> = row.get(5).ok();
+            let date: Option<i64> = row.get(6).ok();
+            let mid: Option<String> = row.get(7).ok();
+            let thread_id: Option<i64> = row.get(8).ok();
+            let total_parts: Option<u32> = row.get(9).ok();
+            let received_parts: Option<u32> = row.get(10).ok();
+            let failed_reason: Option<String> = row.get(11).ok();
+            let model_name: Option<String> = row.get(12).ok();
+            let prompts_git_hash: Option<String> = row.get(13).ok();
+            let baseline_logs: Option<String> = row.get(14).ok();
+            let baseline_id: Option<i64> = row.get(15).ok();
+            let provider: Option<String> = row.get(16).ok();
+            let baseline = if let Some(bid) = baseline_id {
+                let mut browse = self
+                    .conn
+                    .query(
+                        "SELECT repo_url, branch, last_known_commit FROM baselines WHERE id = ?",
+                        libsql::params![bid],
+                    )
+                    .await?;
+                if let Ok(Some(brow)) = browse.next().await {
+                    Some(serde_json::json!({
+                       "repo_url": brow.get::<Option<String>>(0).ok(),
+                       "branch": brow.get::<Option<String>>(1).ok(),
+                       "commit": brow.get::<Option<String>>(2).ok(),
+                    }))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let limit_val = limit.unwrap_or(50);
+            let page_val = page.unwrap_or(1);
+            let offset_val = limit_val * (page_val.saturating_sub(1));
+
+            let mut subsystems = Vec::new();
+            let mut sub_rows = self
+                .conn
+                .query(
+                    "SELECT s.name FROM subsystems s
+                 JOIN patchsets_subsystems ps ON s.id = ps.subsystem_id
+                 WHERE ps.patchset_id = ?",
+                    libsql::params![pid],
+                )
+                .await?;
+            while let Ok(Some(row)) = sub_rows.next().await {
+                subsystems.push(row.get::<String>(0)?);
+            }
+
+            let mut total_patches = 0;
+            let mut count_rows = self
+                .conn
+                .query(
+                    "SELECT COUNT(*) FROM patches WHERE patchset_id = ?",
+                    libsql::params![pid],
+                )
+                .await?;
+            if let Ok(Some(row)) = count_rows.next().await {
+                total_patches = row.get::<i64>(0)?;
+            }
+
+            let mut patches = Vec::new();
+            let mut patch_ids = Vec::new();
+            let mut patch_rows = self
+                .conn
+                .query(
+                    "SELECT p.id, p.message_id, p.part_index, m.id, m.subject, p.status, p.apply_error, 
+                            eo.status as email_status, eo.to_addresses, eo.cc_addresses
+                 FROM patches p
+                 LEFT JOIN messages m ON p.message_id = m.message_id
+                 LEFT JOIN email_outbox eo ON eo.patch_id = p.id
+                 WHERE p.patchset_id = ? 
+                 ORDER BY p.part_index ASC
+                 LIMIT ? OFFSET ?",
+                    libsql::params![pid, limit_val, offset_val],
+                )
+                .await?;
+
+            #[allow(clippy::similar_names)]
+            while let Ok(Some(p)) = patch_rows.next().await {
+                let p_id: i64 = p.get(0)?;
+                patch_ids.push(p_id);
+                patches.push(serde_json::json!({
+                    "id": p_id,
+                    "message_id": p.get::<String>(1)?,
+                    "part_index": p.get::<Option<i64>>(2).ok(),
+                    "msg_db_id": p.get::<Option<i64>>(3).ok(),
+                    "subject": p.get::<Option<String>>(4).ok(),
+                    "status": p.get::<Option<String>>(5).ok(),
+                    "apply_error": p.get::<Option<String>>(6).ok(),
+                    "email_status": p.get::<Option<String>>(7).ok(),
+                    "email_to": p.get::<Option<String>>(8).ok(),
+                    "email_cc": p.get::<Option<String>>(9).ok(),
+                }));
+            }
+
+            let mut reviews = Vec::new();
+            let mut in_clause = patch_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            if in_clause.is_empty() {
+                in_clause = "-1".to_string();
+            }
+            let query_str = format!(
+                "SELECT r.summary, r.created_at, ai.output_raw, 
+                        r.result_description, r.status, r.inline_review, ai.tokens_in, ai.tokens_out, r.patch_id, r.id, ai.tokens_cached
+                 FROM reviews r
+                 LEFT JOIN ai_interactions ai ON r.interaction_id = ai.id
+                 WHERE r.patchset_id = ? AND (r.patch_id IS NULL OR r.patch_id IN ({}))
+                 ORDER BY r.created_at ASC", in_clause);
+
+            let mut params = vec![libsql::Value::Integer(pid)];
+            for &pid_val in &patch_ids {
+                params.push(libsql::Value::Integer(pid_val));
+            }
+
+            let mut rev_rows = self.conn.query(&query_str, params).await?;
+
+            while let Ok(Some(r)) = rev_rows.next().await {
+                reviews.push(serde_json::json!({
+                    "summary": r.get::<Option<String>>(0).ok(),
+                    "created_at": r.get::<Option<i64>>(1).ok(),
+                    "output": r.get::<Option<String>>(2).ok(),
+                    "result": r.get::<Option<String>>(3).ok(),
+                    "status": r.get::<Option<String>>(4).ok(),
+                    "inline_review": r.get::<Option<String>>(5).ok(),
+                    "tokens_in": r.get::<Option<u32>>(6).ok(),
+                    "tokens_out": r.get::<Option<u32>>(7).ok(),
+                    "patch_id": r.get::<Option<i64>>(8).ok(),
+                    "id": r.get::<i64>(9).ok(),
+                    "tokens_cached": r.get::<Option<u32>>(10).ok(),
+                    "model": model_name.clone(),
+                    "provider": provider.clone(),
+                    "prompts_hash": prompts_git_hash.clone(),
+                    "baseline": baseline.clone()
+                }));
+            }
+
+            let mut messages = Vec::new();
+            if let Some(tid) = thread_id {
+                let mut msg_rows = self.conn.query(
+                    "SELECT id, message_id, author, date, subject, in_reply_to FROM messages WHERE thread_id = ? AND subject != '(placeholder)' ORDER BY date ASC",
+                    libsql::params![tid]
+                ).await?;
+                while let Ok(Some(m)) = msg_rows.next().await {
+                    messages.push(serde_json::json!({
+                        "id": m.get::<i64>(0)?,
+                        "message_id": m.get::<String>(1)?,
+                        "author": m.get::<Option<String>>(2).ok(),
+                        "date": m.get::<Option<i64>>(3).ok(),
+                        "subject": m.get::<Option<String>>(4).ok(),
+                        "in_reply_to": m.get::<Option<String>>(5).ok(),
+                    }));
+                }
+            }
+
+            Ok(Some(serde_json::json!({
+                "id": pid,
+                "message_id": mid,
+                "subject": subject,
+                "author": author,
+                "date": date,
+                "status": status,
+                "failed_reason": failed_reason,
+                "to": to,
+                "cc": cc,
+                "total_parts": total_parts,
+                "total_patches_in_db": total_patches,
+                "page": page_val,
+                "limit": limit_val,
+                "received_parts": received_parts,
+                "reviews": reviews,
+                "patches": patches,
+                "thread": messages,
+                "subsystems": subsystems,
+                "model_name": model_name,
+                "prompts_git_hash": prompts_git_hash,
+                "baseline_logs": baseline_logs,
+                "baseline": baseline,
+                "provider": provider
+            })))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub async fn get_patchset_summary_by_msgid(
+        &self,
+        msg_id: &str,
+        page: Option<u32>,
+        limit: Option<u32>,
+    ) -> Result<Option<serde_json::Value>> {
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT id FROM patchsets WHERE cover_letter_message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
+        if let Ok(Some(row)) = rows.next().await {
+            let id: i64 = row.get(0)?;
+            return self.get_patchset_summary(id, page, limit).await;
+        }
+
+        let mut rows = self
+            .conn
+            .query(
+                "SELECT patchset_id FROM patches WHERE message_id = ?",
+                libsql::params![msg_id],
+            )
+            .await?;
+        if let Ok(Some(row)) = rows.next().await {
+            let id: i64 = row.get(0)?;
+            return self.get_patchset_summary(id, page, limit).await;
+        }
+
+        Ok(None)
+    }
+
     pub async fn get_review_details(&self, id: i64) -> Result<Option<serde_json::Value>> {
         let mut rows = self
             .conn

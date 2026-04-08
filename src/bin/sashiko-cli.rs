@@ -465,7 +465,7 @@ async fn handle_show(
         // Fetch review if available
         let mut review_data = None;
         if status == "Reviewed" || status == "Failed" || status == "Failed To Apply" {
-            let review_url = format!("{}/api/review?patchset_id={}", base_url, numeric_id);
+            let review_url = format!("{}/api/review_log?patchset_id={}", base_url, numeric_id);
             let review_resp = client.get(&review_url).send().await?;
 
             if review_resp.status().is_success() {

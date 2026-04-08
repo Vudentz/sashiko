@@ -259,8 +259,10 @@ pub async fn run_server(
         .route("/api/patchsets", get(list_patchsets))
         .route("/api/messages", get(list_messages))
         .route("/api/patch", get(get_patchset))
+        .route("/api/patchset", get(get_patchset_summary))
         .route("/api/message", get(get_message))
         .route("/api/review", get(get_review))
+        .route("/api/review_log", get(get_review_log))
         .route("/api/stats", get(get_stats))
         .route("/api/stats/timeline", get(stats_timeline))
         .route("/api/stats/reviews", get(stats_reviews))
@@ -679,6 +681,76 @@ async fn get_review(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let result = if let Some(ps_id) = query.patchset_id {
         info!("Fetching latest review for patchset id: {}", ps_id);
+        state.db.get_latest_review_for_patchset(ps_id).await
+    } else if let Some(id) = query.id {
+        info!("Fetching details for review id: {}", id);
+        state.db.get_review_details(id).await
+    } else {
+        return Err(StatusCode::BAD_REQUEST);
+    };
+
+    match result {
+        Ok(Some(details)) => Ok(Json(details)),
+        Ok(None) => {
+            info!("Review not found");
+            Err(StatusCode::NOT_FOUND)
+        }
+        Err(e) => {
+            info!("Database error: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn get_patchset_summary(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<PatchQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let result = if let Ok(id_val) = query.id.parse::<i64>() {
+        info!("Fetching summary for patchset id: {}", id_val);
+        state
+            .db
+            .get_patchset_summary(id_val, query.page, query.per_page)
+            .await
+    } else {
+        info!("Fetching summary for patchset msgid: {}", query.id);
+        state
+            .db
+            .get_patchset_summary_by_msgid(&query.id, query.page, query.per_page)
+            .await
+    };
+
+    match result {
+        Ok(Some(mut details)) => {
+            if let Some(obj) = details.as_object_mut() {
+                obj.insert(
+                    "smtp_enabled".to_string(),
+                    serde_json::Value::Bool(state.smtp_enabled),
+                );
+                obj.insert(
+                    "dry_run".to_string(),
+                    serde_json::Value::Bool(state.dry_run),
+                );
+            }
+            Ok(Json(details))
+        }
+        Ok(None) => {
+            info!("Patchset not found: {}", query.id);
+            Err(StatusCode::NOT_FOUND)
+        }
+        Err(e) => {
+            info!("Database error: {}", e);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+async fn get_review_log(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<ReviewQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let result = if let Some(ps_id) = query.patchset_id {
+        info!("Fetching latest review log for patchset id: {}", ps_id);
         state.db.get_latest_review_for_patchset(ps_id).await
     } else if let Some(id) = query.id {
         info!("Fetching details for review id: {}", id);

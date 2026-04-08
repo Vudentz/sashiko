@@ -428,7 +428,10 @@ mod tests {
     fn test_recipient_parsing() {
         let raw = b"Message-ID: <1>\r\nFrom: a@b.com\r\nTo: \"Valid User\" <valid@example.com>, invalid_no_at, <another@test.com>\r\nCc: Bad <bad>, \"Good\" <good@example.com>\r\nSubject: Test\r\n\r\nBody";
         let (meta, _) = parse_email(raw).unwrap();
-        assert_eq!(meta.to, "\"Valid User\" <valid@example.com>, another@test.com");
+        assert_eq!(
+            meta.to,
+            "\"Valid User\" <valid@example.com>, another@test.com"
+        );
         assert_eq!(meta.cc, "\"Good\" <good@example.com>");
     }
 
