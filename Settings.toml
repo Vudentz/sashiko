@@ -36,6 +36,12 @@ temperature = 1.0
 # max_input_tokens = 180000
 # max_interactions = 150
 
+# To use GitHub Copilot as the AI provider (uses COPILOT_API_KEY env var for auth):
+# provider = "copilot"
+# model = "gpt-4o"
+# max_input_tokens = 128000
+# max_interactions = 50
+
 [ai.claude]
 prompt_caching = true
 

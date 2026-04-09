@@ -248,6 +248,44 @@ pub fn create_provider(settings: &Settings) -> Result<Arc<dyn AiProvider>> {
                 settings.ai.api_timeout_secs,
             )))
         }
+        "copilot" => {
+            let api_key = std::env::var("COPILOT_API_KEY")
+                .or_else(|_| std::env::var("LLM_API_KEY"))
+                .unwrap_or_default();
+
+            let base_url = settings
+                .ai
+                .copilot
+                .as_ref()
+                .and_then(|c| c.base_url.clone())
+                .unwrap_or_else(|| {
+                    "https://api.githubcopilot.com/chat/completions".to_string()
+                });
+
+            let context_window = settings
+                .ai
+                .copilot
+                .as_ref()
+                .and_then(|c| c.context_window_size)
+                .unwrap_or(128_000);
+
+            let max_tokens = settings
+                .ai
+                .copilot
+                .as_ref()
+                .and_then(|c| c.max_tokens)
+                .unwrap_or(16_384);
+
+            Ok(Arc::new(openai::OpenAiCompatClient::new_with_api_key(
+                base_url,
+                openai::OpenAiProviderType::OpenAiCompatible,
+                settings.ai.model.clone(),
+                context_window,
+                max_tokens,
+                settings.ai.api_timeout_secs,
+                api_key,
+            )))
+        }
         "claude-cli" => Ok(Arc::new(claude_cli::ClaudeCliProvider {
             model: settings.ai.model.clone(),
         })),
@@ -388,6 +426,12 @@ mod tests {
         settings.ai.model = "gpt-4o".to_string();
         let provider = create_provider(&settings)?;
         assert_eq!(provider.get_capabilities().model_name, "gpt-4o");
+
+        settings.ai.provider = "copilot".to_string();
+        settings.ai.model = "gpt-4o".to_string();
+        let provider = create_provider(&settings)?;
+        assert_eq!(provider.get_capabilities().model_name, "gpt-4o");
+        assert_eq!(provider.get_capabilities().context_window_size, 128_000);
 
         settings.ai.provider = "unknown".to_string();
         let result = create_provider(&settings);

@@ -75,6 +75,9 @@ case "$AI_PROVIDER" in
     openai-compat)
         export OPENAI_API_KEY="$AI_API_KEY"
         ;;
+    copilot)
+        export COPILOT_API_KEY="$AI_API_KEY"
+        ;;
     bedrock)
         # Bedrock uses AWS credentials, not a simple API key
         export AWS_ACCESS_KEY_ID="${AI_API_KEY%%:*}"

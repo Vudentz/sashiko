@@ -143,6 +143,27 @@ impl OpenAiCompatClient {
             .or_else(|_| std::env::var("LLM_API_KEY"))
             .unwrap_or_default();
 
+        Self::new_with_api_key(
+            base_url,
+            provider_type,
+            model,
+            context_window_size,
+            max_tokens,
+            api_timeout_secs,
+            api_key,
+        )
+    }
+
+    /// Creates a new client with an explicit API key instead of reading from environment.
+    pub fn new_with_api_key(
+        base_url: String,
+        provider_type: OpenAiProviderType,
+        model: String,
+        context_window_size: usize,
+        max_tokens: u32,
+        api_timeout_secs: u64,
+        api_key: String,
+    ) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         if !api_key.is_empty()
             && let Ok(value) =

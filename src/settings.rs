@@ -152,6 +152,18 @@ pub struct OpenAiCompatSettings {
 
 #[derive(Debug, Deserialize, Clone)]
 #[allow(unused)]
+pub struct CopilotSettings {
+    /// Base URL for the Copilot API. Defaults to https://api.githubcopilot.com/chat/completions
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub context_window_size: Option<usize>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[allow(unused)]
 pub struct AiSettings {
     pub provider: String,
     pub model: String,
@@ -174,6 +186,7 @@ pub struct AiSettings {
     pub gemini: Option<GeminiSettings>,
     pub bedrock: Option<BedrockSettings>,
     pub openai_compat: Option<OpenAiCompatSettings>,
+    pub copilot: Option<CopilotSettings>,
 }
 
 fn default_api_timeout_secs() -> u64 {

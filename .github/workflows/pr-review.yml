@@ -42,17 +42,27 @@ jobs:
           # Fetch full history for baseline resolution
           fetch-depth: 0
 
-      - name: Run Sashiko Review
+      # Option A: Use GitHub Copilot
+      - name: Run Sashiko Review (Copilot)
         uses: sashiko-dev/sashiko@main
         id: review
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          ai_provider: 'gemini'
-          ai_model: 'gemini-3.1-pro-preview'
+          ai_provider: 'copilot'
+          ai_model: 'gpt-4o'
           ai_api_key: ${{ secrets.AI_API_KEY }}
           severity_threshold: 'low'
-          # custom_prompt: 'Focus on security and performance issues.'
-          # prompts_path: '.sashiko/prompts'
+
+      # Option B: Use Gemini (requires AI_API_KEY secret)
+      # - name: Run Sashiko Review (Gemini)
+      #   uses: sashiko-dev/sashiko@main
+      #   id: review
+      #   with:
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     ai_provider: 'gemini'
+      #     ai_model: 'gemini-3.1-pro-preview'
+      #     ai_api_key: ${{ secrets.AI_API_KEY }}
+      #     severity_threshold: 'low'
 
       - name: Review Summary
         if: always()
