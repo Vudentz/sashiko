@@ -1782,9 +1782,34 @@ impl Database {
                 new_prefixes == old_prefixes
             };
 
+            let mut stem_matched = false;
+            if !same_thread {
+                if let Some(ref cl_id) = existing_cover_id {
+                    let new_stem = message_id.split('-').next().unwrap_or(message_id);
+                    let old_stem = cl_id.split('-').next().unwrap_or(cl_id);
+                    if new_stem == old_stem {
+                        stem_matched = true;
+                    }
+                }
+                if !stem_matched {
+                    let mut p_rows = self.conn.query(
+                        "SELECT message_id FROM patches WHERE patchset_id = ? LIMIT 1",
+                        libsql::params![id],
+                    ).await?;
+                    if let Ok(Some(row)) = p_rows.next().await {
+                        let other_id: String = row.get(0)?;
+                        let new_stem = message_id.split('-').next().unwrap_or(message_id);
+                        let old_stem = other_id.split('-').next().unwrap_or(&other_id);
+                        if new_stem == old_stem {
+                            stem_matched = true;
+                        }
+                    }
+                }
+            }
+
             // Thread Enforcement: To prevent cross-thread "stealing" of patches for resends of the same series,
-            // we strictly require multi-part series patches to belong to the same thread.
-            let thread_compatible = same_thread || is_singleton;
+            // we strictly require multi-part series patches to belong to the same thread, UNLESS their Message-ID stems match.
+            let thread_compatible = same_thread || is_singleton || stem_matched;
 
             if author_or_series_match
                 && (!strict_author || (date - existing_date).abs() < 86400)

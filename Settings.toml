@@ -5,7 +5,7 @@ url = "sashiko.db"
 token = ""
 
 [mailing_lists]
-track = ["linux-kernel"]
+track = ["netdev"]
 
 [nntp]
 server = "nntp.lore.kernel.org"
@@ -25,7 +25,7 @@ port = 119
 
 [ai]
 provider = "gemini"
-model = "gemini-3.1-pro-preview"
+model = "gemini-3.1-flash-lite-preview"
 max_input_tokens = 900000
 max_interactions = 50
 temperature = 1.0
